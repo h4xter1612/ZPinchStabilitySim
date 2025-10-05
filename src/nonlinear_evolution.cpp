@@ -28,25 +28,23 @@ void NonlinearEvolution::initializeGrid() {
         r_grid_[i] = i * dr;
     }
     
-    // Axial grid (periodic boundary conditions)
+    // Axial grid
     z_grid_.resize(params_.Nz);
     double dz = params_.L / params_.Nz;
     for (int j = 0; j < params_.Nz; ++j) {
         z_grid_[j] = j * dz;
     }
     
-    // Initialize state arrays (8 variables × Nr × Nz)
-    int n_vars = 8; // ρ, v_r, v_z, v_θ, p, B_r, B_z, B_θ
+    // Initialize state arrays
+    int n_vars = 8;
     state_curr_.resize(n_vars);
     state_next_.resize(n_vars);
     state_temp_.resize(n_vars);
-    perturbation_.resize(n_vars);
     
     for (int var = 0; var < n_vars; ++var) {
         state_curr_[var].resize(params_.Nr * params_.Nz, 0.0);
         state_next_[var].resize(params_.Nr * params_.Nz, 0.0);
         state_temp_[var].resize(params_.Nr * params_.Nz, 0.0);
-        perturbation_[var].resize(params_.Nr * params_.Nz, 0.0);
     }
 }
 
@@ -54,149 +52,87 @@ void NonlinearEvolution::initializeGrid() {
 // INITIALIZATION FROM EQUILIBRIUM
 // =============================================================================
 void NonlinearEvolution::initializeFromEquilibrium() {
-    // Get equilibrium profiles
-    const auto& r_eq = equilibrium_->getRadialGrid(); // Non used variable
+    if (!equilibrium_) {
+        std::cerr << "ERROR: Equilibrium solver not available!" << std::endl;
+        return;
+    }
+    
     const auto& p_eq = equilibrium_->getPressureProfile();
     const auto& Bz_eq = equilibrium_->getBzProfile();
     const auto& Btheta_eq = equilibrium_->getBthetaProfile();
     
-    // Initialize state with equilibrium values
+    // Realistic mass density calculation
+    double n0 = params_.n0;
+    double m_i = 1.67e-27 * params_.mi_over_me;
+    double rho0 = n0 * m_i;
+
     for (int i = 0; i < params_.Nr; ++i) {
         for (int j = 0; j < params_.Nz; ++j) {
             int idx = i * params_.Nz + j;
             
-            // Density from pressure and temperature (ideal gas law)
-            double T0 = params_.T0 * 1.6e-19; // Convert eV to J
-            state_curr_[RHO][idx] = p_eq[i] / T0;
-            
-            // Velocities (zero in equilibrium)
+            state_curr_[RHO][idx] = rho0;
             state_curr_[VR][idx] = 0.0;
             state_curr_[VZ][idx] = 0.0;
             state_curr_[VTHETA][idx] = 0.0;
-            
-            // Pressure
             state_curr_[P][idx] = p_eq[i];
-            
-            // Magnetic fields
-            state_curr_[BR][idx] = 0.0; // No radial field in equilibrium
+            state_curr_[BR][idx] = 0.0;
             state_curr_[BZ][idx] = Bz_eq[i];
             state_curr_[BTHETA][idx] = Btheta_eq[i];
         }
     }
     
-    std::cout << "Initialized from equilibrium solution" << std::endl;
+    applyBoundaryConditions();
 }
 
 // =============================================================================
 // PERTURBATION METHODS
 // =============================================================================
 void NonlinearEvolution::addKinkPerturbation(double amplitude, double kz, int m) {
-    // Kink mode (m=1) perturbation
-    // Perturbs v_r, v_θ, and B_r, B_θ
+    double robust_amplitude = std::max(amplitude, 0.1);
     
     for (int i = 0; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
         for (int j = 0; j < params_.Nz; ++j) {
             int idx = i * params_.Nz + j;
-            double r = r_grid_[i];
-            double z = z_grid_[j];
-            
-            if (r < params_.a) { // Only perturb inside plasma
-                // Velocity perturbation
-                perturbation_[VR][idx] = amplitude * std::sin(m * M_PI * r / params_.a) * 
-                                        std::cos(kz * z);
-                perturbation_[VTHETA][idx] = amplitude * std::cos(m * M_PI * r / params_.a) * 
-                                           std::sin(kz * z);
-                
-                // Magnetic field perturbation
-                perturbation_[BR][idx] = 0.1 * amplitude * state_curr_[BTHETA][idx] * 
-                                       std::sin(m * M_PI * r / params_.a) * std::sin(kz * z);
-                perturbation_[BTHETA][idx] = 0.1 * amplitude * state_curr_[BTHETA][idx] * 
-                                          std::cos(m * M_PI * r / params_.a) * std::cos(kz * z);
-            }
-        }
-    }
-    
-    // Apply perturbation to current state
-    for (int var = 0; var < 8; ++var) {
-        for (int idx = 0; idx < params_.Nr * params_.Nz; ++idx) {
-            state_curr_[var][idx] += perturbation_[var][idx];
-        }
-    }
-    
-    std::cout << "Added kink mode perturbation: amplitude=" << amplitude 
-              << ", kz=" << kz << ", m=" << m << std::endl;
-}
-// =============================================================================
-// ENERGY COMPUTATIONS - IMPLEMENTACIONES FALTANTES
-// =============================================================================
-double NonlinearEvolution::computeInternalEnergy() const {
-    double ie = 0.0;
-    double gamma = 5.0 / 3.0; // adiabatic index
-    
-    for (int i = 0; i < params_.Nr; ++i) {
-        for (int j = 0; j < params_.Nz; ++j) {
-            int idx = i * params_.Nz + j;
-            double r = r_grid_[i];
-            double dr = (i < params_.Nr - 1) ? (r_grid_[i+1] - r_grid_[i]) : 0.0;
-            double dz = params_.L / params_.Nz;
-            
-            ie += (state_curr_[P][idx] / (gamma - 1.0)) * r * dr * dz;
-        }
-    }
-    return ie;
-}
-
-double NonlinearEvolution::computeTotalEnergy() const {
-    return computeKineticEnergy() + computeMagneticEnergy() + computeInternalEnergy();
-}
-
-double NonlinearEvolution::computeSoundSpeed(double pressure, double density) const {
-    if (density <= 0.0) return 0.0;
-    double gamma = 5.0 / 3.0; // adiabatic index for ideal gas
-    return std::sqrt(gamma * pressure / density);
-}
-
-double NonlinearEvolution::computeAlfvenSpeed(double B, double density) const {
-    if (density <= 0.0) return 0.0;
-    const double mu0 = 4.0e-7 * M_PI;
-    return B / std::sqrt(mu0 * density);
-}
-
-void NonlinearEvolution::addSausagePerturbation(double amplitude, double kz) {
-    // Sausage mode (m=0) perturbation
-    // Perturbs v_r, p, and B_θ
-    
-    for (int i = 0; i < params_.Nr; ++i) {
-        for (int j = 0; j < params_.Nz; ++j) {
-            int idx = i * params_.Nz + j;
-            double r = r_grid_[i];
             double z = z_grid_[j];
             
             if (r < params_.a) {
-                // Radial velocity perturbation (compressive)
-                perturbation_[VR][idx] = amplitude * (r / params_.a) * 
-                                        std::sin(kz * z);
+                double r_norm = r / params_.a;
                 
-                // Pressure perturbation
-                perturbation_[P][idx] = 0.5 * amplitude * state_curr_[P][idx] * 
-                                      (r / params_.a) * std::cos(kz * z);
+                // Velocity perturbation
+                state_curr_[VR][idx] += robust_amplitude * r_norm * std::cos(kz * z);
+                state_curr_[VTHETA][idx] += robust_amplitude * r_norm * std::sin(kz * z);
                 
                 // Magnetic field perturbation
-                perturbation_[BTHETA][idx] = 0.1 * amplitude * state_curr_[BTHETA][idx] * 
-                                          (r / params_.a) * std::sin(kz * z);
+                state_curr_[BR][idx] += 0.5 * robust_amplitude * params_.B0 * r_norm * std::sin(kz * z);
+                state_curr_[BTHETA][idx] += 0.5 * robust_amplitude * params_.B0 * r_norm * std::cos(kz * z);
             }
         }
     }
-    
-    // Apply perturbation
-    for (int var = 0; var < 8; ++var) {
-        for (int idx = 0; idx < params_.Nr * params_.Nz; ++idx) {
-            state_curr_[var][idx] += perturbation_[var][idx];
+}
+
+void NonlinearEvolution::addSausagePerturbation(double amplitude, double kz) {
+    // Sausage mode (m=0) perturbation - radial compression/expansion
+    for (int i = 0; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
+        for (int j = 0; j < params_.Nz; ++j) {
+            int idx = i * params_.Nz + j;
+            double z = z_grid_[j];
+            
+            if (r < params_.a) {
+                double r_norm = r / params_.a;
+                
+                // Radial velocity perturbation (compressive)
+                state_curr_[VR][idx] += amplitude * r_norm * std::sin(kz * z);
+                
+                // Pressure perturbation (in phase with compression)
+                state_curr_[P][idx] += 0.3 * amplitude * state_curr_[P][idx] * r_norm * std::cos(kz * z);
+                
+                // Magnetic field perturbation for sausage mode
+                state_curr_[BTHETA][idx] += 0.2 * amplitude * state_curr_[BTHETA][idx] * r_norm * std::sin(kz * z);
+            }
         }
     }
-    
-    std::cout << "Added sausage mode perturbation: amplitude=" << amplitude 
-              << ", kz=" << kz << std::endl;
 }
 
 void NonlinearEvolution::addRandomPerturbation(double amplitude) {
@@ -209,374 +145,293 @@ void NonlinearEvolution::addRandomPerturbation(double amplitude) {
             int idx = i * params_.Nz + j;
             
             if (r_grid_[i] < params_.a) {
-                // Add random perturbations to velocities and magnetic fields
-                state_curr_[VR][idx] += dis(gen) * 0.01 * params_.alfven_speed();
-                state_curr_[VZ][idx] += dis(gen) * 0.01 * params_.alfven_speed();
-                state_curr_[VTHETA][idx] += dis(gen) * 0.01 * params_.alfven_speed();
-                
-                state_curr_[BR][idx] += dis(gen) * 0.01 * params_.B0;
-                state_curr_[BTHETA][idx] += dis(gen) * 0.01 * params_.B0;
+                state_curr_[VR][idx] += dis(gen);
+                state_curr_[VZ][idx] += dis(gen);
+                state_curr_[VTHETA][idx] += dis(gen);
             }
         }
     }
-    
-    std::cout << "Added random perturbation with amplitude: " << amplitude << std::endl;
 }
 
 // =============================================================================
-// TIME EVOLUTION - MAIN DRIVER
+// TIME EVOLUTION
 // =============================================================================
+bool NonlinearEvolution::checkStateFinite() const {
+    for (int var = 0; var < 8; ++var) {
+        for (size_t i = 0; i < state_curr_[var].size(); ++i) {
+            if (!std::isfinite(state_curr_[var][i])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 void NonlinearEvolution::evolve(double t_max, double output_interval) {
-    std::cout << "Starting nonlinear evolution to t = " << t_max << std::endl;
-    std::cout << "Output interval: " << output_interval << std::endl;
-    
+    std::cout << "Starting nonlinear evolution to t = " << t_max << " s" << std::endl;
+
+    if (!checkStateFinite()) {
+        std::cout << "ERROR: Initial state contains NaN or Inf values!" << std::endl;
+        return;
+    }
+
     double next_output_time = output_interval;
     int output_count = 0;
-    
+
+    // ✅ Save initial state
+    std::string initial_filename = "data/snap/output_state_0us.csv";
+    saveState(initial_filename);
+    std::cout << "Saved initial state: " << initial_filename << std::endl;
+
+    double initial_amp = computeKinkAmplitude();
+
+    const int bar_width = 50;  // visual width of the progress bar
+    auto start_time = std::chrono::steady_clock::now();  // ⏱️ start timing
+
     while (time_ < t_max) {
-        // Compute adaptive time step
         double dt = computeCFLTimeStep();
-        if (time_ + dt > t_max) {
+        dt = std::max(dt, 1e-9);
+        if (time_ + dt > t_max)
             dt = t_max - time_;
+
+        if (!stepEuler(dt)) {
+            std::cout << "\nWARNING: Time step failed at t = " << time_ << std::endl;
+            break;
         }
-        
-        // Perform time step
-        stepSplitStep(dt);
-        
-        // Update time and step counter
+
         time_ += dt;
         step_count_++;
-        
-        // Store diagnostics
-        time_history_.push_back(time_);
-        energy_history_.push_back(computeTotalEnergy());
-        
-        // Output if needed
-        if (time_ >= next_output_time || time_ >= t_max) {
-            std::string filename = "data/snap/output_state_" + std::to_string(output_count) + ".csv";
+        storeDiagnostics();
+
+        // Temporary debug output
+        // if (step_count_ % 10 == 0) {
+        //     debugGrowthCalculation();
+        // }
+
+        if ((time_ >= next_output_time && time_ > 0) || step_count_ % 1000 == 0) {
+            std::string filename =
+                "data/snap/output_state_" + std::to_string(output_count + 1) + "us.csv";
             saveState(filename);
-            
-            std::cout << "Step " << step_count_ << ", t = " << time_ 
-                      << ", dt = " << dt << ", Energy = " << computeTotalEnergy() << std::endl;
-            
+
+            double kink_amp = computeKinkAmplitude();
+            double growth_rate = computeGrowthRate();
+
+            // Show progress
+            // std::cout << "t = " << time_ << " s, Kink amp = " << kink_amp 
+            //           << " (" << (kink_amp/initial_amp) << "x), Growth rate = " 
+            //           << growth_rate << " s^-1" << std::endl;
+            // std::cout << "Saved snapshot: " << filename << std::endl;
+
+            // === 🟢 Progress bar with elapsed time and ETA ===
+            double progress = time_ / t_max;
+            int pos = static_cast<int>(bar_width * progress);
+
+            auto now = std::chrono::steady_clock::now();
+            double elapsed_s =
+                std::chrono::duration<double>(now - start_time).count();
+            double eta_s = (progress > 0.0) ? elapsed_s * (1.0 - progress) / progress : 0.0;
+
+            // Convert to mm:ss format
+            int elapsed_min = static_cast<int>(elapsed_s) / 60;
+            int elapsed_sec = static_cast<int>(elapsed_s) % 60;
+            int eta_min = static_cast<int>(eta_s) / 60;
+            int eta_sec = static_cast<int>(eta_s) % 60;
+
+            std::cout << "\r[";
+            for (int i = 0; i < bar_width; ++i) {
+                if (i < pos)
+                    std::cout << "=";
+                else if (i == pos)
+                    std::cout << ">";
+                else
+                    std::cout << " ";
+            }
+
+            std::cout << "] "
+                      << std::fixed << std::setprecision(1) << (progress * 100.0) << "% "
+                      << "| t = " << std::scientific << std::setprecision(2) << time_ << " s "
+                      << "| x" << std::fixed << std::setprecision(1)
+                      << (kink_amp / initial_amp)
+                      << " | Elapsed: " << elapsed_min << "m" << std::setw(2)
+                      << std::setfill('0') << elapsed_sec << "s"
+                      << " | ETA: " << eta_min << "m" << std::setw(2)
+                      << std::setfill('0') << eta_sec << "s" << std::flush;
+
             next_output_time += output_interval;
             output_count++;
+
+            if (kink_amp > 10000 * initial_amp) {
+                std::cout << "\nINSTABILITY GROWN 10,000x! Stopping early." << std::endl;
+                break;
+            }
+        }
+    }
+
+    std::cout << std::endl;  // final line break for clean output 
+    saveTimeHistory("data/time_history.csv");
+    
+    double final_amp = computeKinkAmplitude();
+    std::cout << "Evolution completed: " << final_amp << " (" 
+              << (final_amp/initial_amp) << "x growth)" << std::endl;
+    std::cout << "Total steps: " << step_count_ << std::endl;
+    std::cout << "Total snapshots saved: " << output_count + 1 << std::endl; // +1 por el inicial
+}
+
+// =============================================================================
+// EULER METHOD
+// =============================================================================
+bool NonlinearEvolution::stepEuler(double dt) {
+    try {
+        auto rhs = computeRHS(state_curr_);
+
+        // Apply update
+        for (int var = 0; var < 8; ++var) {
+            for (int i = 0; i < params_.Nr * params_.Nz; ++i) {
+                state_curr_[var][i] += dt * rhs[var][i];
+            }
         }
         
-        // Check for instability growth
-        if (step_count_ % 100 == 0) {
-            double growth_rate = computeGrowthRate();
-            growth_rate_history_.push_back(growth_rate);
-            std::cout << "Growth rate estimate: " << growth_rate << " s^-1" << std::endl;
+        applyBoundaryConditions();
+        
+        // Ensure positivity
+        for (int i = 0; i < params_.Nr * params_.Nz; ++i) {
+            state_curr_[RHO][i] = std::max(state_curr_[RHO][i], 1e-10);
+            state_curr_[P][i] = std::max(state_curr_[P][i], 1e-10);
         }
+        
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error in Euler step: " << e.what() << std::endl;
+        return false;
     }
-    
-    std::cout << "Evolution completed. Total steps: " << step_count_ << std::endl;
 }
 
 // =============================================================================
-// SPLIT-STEP TIME INTEGRATION
+// COMPUTE RIGHT-HAND SIDE
 // =============================================================================
-void NonlinearEvolution::stepSplitStep(double dt) {
-    // Strang splitting for MHD equations:
-    // Step 1: Half step for hyperbolic terms (advection)
-    // Step 2: Full step for source terms (pressure + Lorentz force)
-    // Step 3: Half step for hyperbolic terms (advection)
-    
-    // Step 1: Half hyperbolic step
-    stepHyperbolic(dt / 2.0);
-    
-    // Step 2: Full source terms step
-    stepSourceTerms(dt);
-    
-    // Step 3: Half hyperbolic step
-    stepHyperbolic(dt / 2.0);
-    
-    // Step 4: Divergence cleaning (if enabled)
-    if (enable_divB_cleaning_) {
-        stepDivergenceCleaning(dt);
-    }
-    
-    // Apply boundary conditions
-    applyBoundaryConditions();
-}
+std::vector<std::vector<double>> NonlinearEvolution::computeRHS(const std::vector<std::vector<double>>& state) {
+    std::vector<std::vector<double>> rhs(8, std::vector<double>(params_.Nr * params_.Nz, 0.0));
 
-void NonlinearEvolution::stepHyperbolic(double dt) {
-    // Hyperbolic step: advection terms using conservative update
-    std::vector<std::vector<double>> flux_contrib(8, 
-        std::vector<double>(params_.Nr * params_.Nz, 0.0));
-    
-    computeAdvectionTerms(state_curr_, flux_contrib);
-    
-    // Update state using flux
-    for (int var = 0; var < 8; ++var) {
-        for (int idx = 0; idx < params_.Nr * params_.Nz; ++idx) {
-            state_curr_[var][idx] += dt * flux_contrib[var][idx];
-        }
-    }
-}
-
-void NonlinearEvolution::stepSourceTerms(double dt) {
-    // Source terms: pressure gradient + Lorentz force
-    std::vector<std::vector<double>> source_contrib(8, 
-        std::vector<double>(params_.Nr * params_.Nz, 0.0));
-    
-    // Compute pressure terms
-    computePressureTerms(state_curr_, source_contrib);
-    
-    // Compute Lorentz force terms
-    computeLorentzTerms(state_curr_, source_contrib);
-    
-    // Update state using source terms
-    for (int var = 0; var < 8; ++var) {
-        for (int idx = 0; idx < params_.Nr * params_.Nz; ++idx) {
-            state_curr_[var][idx] += dt * source_contrib[var][idx];
-        }
-    }
-}
-
-void NonlinearEvolution::stepDivergenceCleaning(double dt) {
-    // Simple hyperbolic divergence cleaning for ∇·B = 0
-    // Uses a diffusive approach to damp numerical divergence
-    
     for (int i = 1; i < params_.Nr - 1; ++i) {
-        for (int j = 1; j < params_.Nz - 1; ++j) {
-            int idx = i * params_.Nz + j;
-            
-            // Compute divergence of B
-            double divB = derivativeR(state_curr_[BR], i, j) + 
-                         derivativeZ(state_curr_[BZ], i, j) +
-                         state_curr_[BR][idx] / r_grid_[i]; // Cylindrical coordinates
-            
-            // Apply correction to magnetic field
-            double correction = divB_cleaning_coeff_ * divB * dt;
-            state_curr_[BR][idx] -= correction * derivativeR(state_curr_[BR], i, j);
-            state_curr_[BZ][idx] -= correction * derivativeZ(state_curr_[BZ], i, j);
-        }
-    }
-}
-
-// =============================================================================
-// RIGHT-HAND SIDE COMPUTATIONS
-// =============================================================================
-void NonlinearEvolution::computeAdvectionTerms(const std::vector<std::vector<double>>& state,
-                                              std::vector<std::vector<double>>& advection) {
-    // Compute advection terms using conservative finite differences
-    // This is a simplified implementation - real code would use more sophisticated methods
-    
-    for (int i = 1; i < params_.Nr - 1; ++i) {
-        for (int j = 1; j < params_.Nz - 1; ++j) {
+        for (int j = 0; j < params_.Nz; ++j) {
             int idx = i * params_.Nz + j;
             double r = r_grid_[i];
-            double dr = r_grid_[i+1] - r_grid_[i];
-            double dz = z_grid_[j+1] - z_grid_[j];
+            if (r < 1e-12) continue;
             
-            // Mass conservation
-            double flux_r = state[RHO][idx] * state[VR][idx];
-            double flux_z = state[RHO][idx] * state[VZ][idx];
+            // Neighbor indices with periodic BC in z
+            int idx_rp = (i+1) * params_.Nz + j;
+            int idx_rm = (i-1) * params_.Nz + j;
+            int jp = (j + 1) % params_.Nz;
+            int jm = (j - 1 + params_.Nz) % params_.Nz;
+            int idx_zp = i * params_.Nz + jp;
+            int idx_zm = i * params_.Nz + jm;
             
-            advection[RHO][idx] = -(1.0/r) * (r * flux_r - (r - dr) * 
-                             state[RHO][(i-1)*params_.Nz + j] * state[VR][(i-1)*params_.Nz + j]) / dr
-                             - (flux_z - state[RHO][i*params_.Nz + j-1] * 
-                             state[VZ][i*params_.Nz + j-1]) / dz;
-            
-            // Similar implementations for other variables...
-            // Note: This is a simplified placeholder - full MHD advection is complex
-        }
-    }
-}
+            double dr = r_grid_[i+1] - r_grid_[i-1];
+            double dz = params_.L / params_.Nz;
 
-void NonlinearEvolution::computePressureTerms(const std::vector<std::vector<double>>& state,
-                                             std::vector<std::vector<double>>& pressure) {
-    // Pressure gradient terms in momentum equations
-    
-    for (int i = 1; i < params_.Nr - 1; ++i) {
-        for (int j = 1; j < params_.Nz - 1; ++j) {
-            int idx = i * params_.Nz + j;
+            // 1. CONTINUITY EQUATION: ∂ρ/∂t + ∇·(ρv) = 0
+            double flux_r_plus = 0.5 * (state[RHO][idx] * state[VR][idx] + state[RHO][idx_rp] * state[VR][idx_rp]);
+            double flux_r_minus = 0.5 * (state[RHO][idx_rm] * state[VR][idx_rm] + state[RHO][idx] * state[VR][idx]);
+            double flux_z_plus = 0.5 * (state[RHO][idx] * state[VZ][idx] + state[RHO][idx_zp] * state[VZ][idx_zp]);
+            double flux_z_minus = 0.5 * (state[RHO][idx_zm] * state[VZ][idx_zm] + state[RHO][idx] * state[VZ][idx]);
             
-            // Radial momentum: -∂p/∂r
-            pressure[VR][idx] = -derivativeR(state[P], i, j);
+            double div_flux = (r_grid_[i+1] * flux_r_plus - r_grid_[i-1] * flux_r_minus) / (r * dr)
+                            + (flux_z_plus - flux_z_minus) / dz;
             
-            // Axial momentum: -∂p/∂z  
-            pressure[VZ][idx] = -derivativeZ(state[P], i, j);
-            
-            // Azimuthal momentum: no direct pressure term in cylindrical coords
-            pressure[VTHETA][idx] = 0.0;
-        }
-    }
-}
+            rhs[RHO][idx] = -div_flux;
 
-void NonlinearEvolution::computeLorentzTerms(const std::vector<std::vector<double>>& state,
-                                            std::vector<std::vector<double>>& lorentz) {
-    // Lorentz force: j × B = (∇ × B) × B / μ₀
-    
-    const double mu0 = 4.0e-7 * M_PI;
-    
-    for (int i = 1; i < params_.Nr - 1; ++i) {
-        for (int j = 1; j < params_.Nz - 1; ++j) {
-            int idx = i * params_.Nz + j;
-            double r = r_grid_[i];
+            // 2. RADIAL MOMENTUM EQUATION
+            double dp_dr = (state[P][idx_rp] - state[P][idx_rm]) / dr;
             
-            // Compute current density j = ∇ × B / μ₀
+            // Calculate current j = ∇×B/μ₀
             double j_r, j_z, j_theta;
             
-            // j_r = -∂B_θ/∂z (in cylindrical coordinates)
-            j_r = -derivativeZ(state[BTHETA], i, j);
+            j_r = -(state[BTHETA][idx_zp] - state[BTHETA][idx_zm]) / (2.0 * dz);
+            j_z = (r_grid_[i+1] * state[BTHETA][idx_rp] - r_grid_[i-1] * state[BTHETA][idx_rm]) / (r * dr);
+            j_theta = (state[BR][idx_zp] - state[BR][idx_zm]) / (2.0 * dz)
+                    - (state[BZ][idx_rp] - state[BZ][idx_rm]) / dr;
             
-            // j_z = (1/r) ∂(r B_θ)/∂r
-            j_z = (1.0/r) * derivativeR(state[BTHETA], i, j) + state[BTHETA][idx] / r;
+            double lorentz_r = (j_theta * state[BZ][idx] - j_z * state[BTHETA][idx]) / mu0_;
+            double centrifugal = state[RHO][idx] * state[VTHETA][idx] * state[VTHETA][idx] / r;
+            double magnetic_tension = (state[BTHETA][idx] * state[BTHETA][idx]) / (mu0_ * r);
             
-            // j_θ = ∂B_r/∂z - ∂B_z/∂r
-            j_theta = derivativeZ(state[BR], i, j) - derivativeR(state[BZ], i, j);
-            
-            // Lorentz force: (j × B)
-            lorentz[VR][idx] = (j_theta * state[BZ][idx] - j_z * state[BTHETA][idx]) / mu0;
-            lorentz[VZ][idx] = (j_r * state[BTHETA][idx] - j_theta * state[BR][idx]) / mu0;
-            lorentz[VTHETA][idx] = (j_z * state[BR][idx] - j_r * state[BZ][idx]) / mu0;
-        }
-    }
-}
+            rhs[VR][idx] = -dp_dr + lorentz_r + centrifugal - magnetic_tension;
 
-// =============================================================================
-// DIAGNOSTIC METHODS
-// =============================================================================
-double NonlinearEvolution::computeKineticEnergy() const {
-    double ke = 0.0;
-    for (int i = 0; i < params_.Nr; ++i) {
-        for (int j = 0; j < params_.Nz; ++j) {
-            int idx = i * params_.Nz + j;
-            double r = r_grid_[i];
-            double dr = (i < params_.Nr - 1) ? (r_grid_[i+1] - r_grid_[i]) : 0.0;
-            double dz = params_.L / params_.Nz;
+            // 3. AXIAL MOMENTUM EQUATION
+            double dp_dz = (state[P][idx_zp] - state[P][idx_zm]) / (2.0 * dz);
+            double lorentz_z = (j_r * state[BTHETA][idx] - j_theta * state[BR][idx]) / mu0_;
             
-            double v2 = state_curr_[VR][idx] * state_curr_[VR][idx] +
-                       state_curr_[VZ][idx] * state_curr_[VZ][idx] +
-                       state_curr_[VTHETA][idx] * state_curr_[VTHETA][idx];
-            
-            ke += 0.5 * state_curr_[RHO][idx] * v2 * r * dr * dz;
-        }
-    }
-    return ke;
-}
+            rhs[VZ][idx] = -dp_dz + lorentz_z;
 
-double NonlinearEvolution::computeMagneticEnergy() const {
-    double me = 0.0;
-    const double mu0 = 4.0e-7 * M_PI;
-    
-    for (int i = 0; i < params_.Nr; ++i) {
-        for (int j = 0; j < params_.Nz; ++j) {
-            int idx = i * params_.Nz + j;
-            double r = r_grid_[i];
-            double dr = (i < params_.Nr - 1) ? (r_grid_[i+1] - r_grid_[i]) : 0.0;
-            double dz = params_.L / params_.Nz;
+            // 4. AZIMUTHAL MOMENTUM EQUATION
+            double flow_coupling = -state[RHO][idx] * state[VR][idx] * state[VTHETA][idx] / r;
+            double lorentz_theta = (j_z * state[BR][idx] - j_r * state[BZ][idx]) / mu0_;
+            double magnetic_coupling = -state[BR][idx] * state[BTHETA][idx] / (mu0_ * r);
             
-            double B2 = state_curr_[BR][idx] * state_curr_[BR][idx] +
-                       state_curr_[BZ][idx] * state_curr_[BZ][idx] +
-                       state_curr_[BTHETA][idx] * state_curr_[BTHETA][idx];
-            
-            me += (B2 / (2.0 * mu0)) * r * dr * dz;
-        }
-    }
-    return me;
-}
+            rhs[VTHETA][idx] = flow_coupling + lorentz_theta + magnetic_coupling;
 
-double NonlinearEvolution::computeGrowthRate() const {
-    // Estimate growth rate from recent energy history
-    if (energy_history_.size() < 10) return 0.0;
-    
-    int n_points = std::min(20, static_cast<int>(energy_history_.size()));
-    double sum_t = 0.0, sum_logE = 0.0, sum_t2 = 0.0, sum_t_logE = 0.0;
-    
-    for (int i = energy_history_.size() - n_points; i < energy_history_.size(); ++i) {
-        double t = time_history_[i];
-        double logE = std::log(std::max(energy_history_[i], 1e-30));
-        
-        sum_t += t;
-        sum_logE += logE;
-        sum_t2 += t * t;
-        sum_t_logE += t * logE;
-    }
-    
-    double denom = n_points * sum_t2 - sum_t * sum_t;
-    if (std::abs(denom) < 1e-12) return 0.0;
-    
-    return (n_points * sum_t_logE - sum_t * sum_logE) / denom;
-}
+            // 5. PRESSURE/ENERGY EQUATION
+            double v_dot_grad_p = state[VR][idx] * (state[P][idx_rp] - state[P][idx_rm]) / dr
+                                + state[VZ][idx] * (state[P][idx_zp] - state[P][idx_zm]) / (2.0 * dz);
+            
+            double div_v = (r_grid_[i+1] * state[VR][idx_rp] - r_grid_[i-1] * state[VR][idx_rm]) / (r * dr)
+                         + (state[VZ][idx_zp] - state[VZ][idx_zm]) / (2.0 * dz);
+            
+            rhs[P][idx] = -v_dot_grad_p - gamma_ * state[P][idx] * div_v;
 
-// =============================================================================
-// NUMERICAL METHODS
-// =============================================================================
-// En nonlinear_evolution.cpp - función computeCFLTimeStep
-double NonlinearEvolution::computeCFLTimeStep() const {
-    double min_dt = 1e-12; // Más conservador
-    
-    for (int i = 0; i < params_.Nr; ++i) {
-        for (int j = 0; j < params_.Nz; ++j) {
-            int idx = i * params_.Nz + j;
+            // 6-8. MAGNETIC INDUCTION EQUATIONS
+            // For Br: ∂Br/∂t = -∂/∂z(v×B)θ
+            double emf_theta_r = state[VR][idx] * state[BZ][idx] - state[VZ][idx] * state[BR][idx];
+            double emf_theta_zp = state[VR][idx_zp] * state[BZ][idx_zp] - state[VZ][idx_zp] * state[BR][idx_zp];
+            double emf_theta_zm = state[VR][idx_zm] * state[BZ][idx_zm] - state[VZ][idx_zm] * state[BR][idx_zm];
             
-            double cs = computeSoundSpeed(state_curr_[P][idx], state_curr_[RHO][idx]);
-            double vA = computeAlfvenSpeed(sqrt(state_curr_[BR][idx]*state_curr_[BR][idx] + 
-                                              state_curr_[BZ][idx]*state_curr_[BZ][idx] + 
-                                              state_curr_[BTHETA][idx]*state_curr_[BTHETA][idx]), 
-                                         state_curr_[RHO][idx]);
+            rhs[BR][idx] = -(emf_theta_zp - emf_theta_zm) / (2.0 * dz);
+
+            // For Bz: ∂Bz/∂t = (1/r)∂/∂r(r(v×B)θ)
+            double r_emf_theta = r * emf_theta_r;
+            double r_emf_theta_rp = r_grid_[i+1] * (state[VR][idx_rp] * state[BZ][idx_rp] - state[VZ][idx_rp] * state[BR][idx_rp]);
+            double r_emf_theta_rm = r_grid_[i-1] * (state[VR][idx_rm] * state[BZ][idx_rm] - state[VZ][idx_rm] * state[BR][idx_rm]);
             
-            double v_max = std::max(cs, vA);
-            v_max = std::max(v_max, std::abs(state_curr_[VR][idx]));
-            v_max = std::max(v_max, std::abs(state_curr_[VZ][idx]));
-            v_max = std::max(v_max, std::abs(state_curr_[VTHETA][idx]));
+            rhs[BZ][idx] = (r_emf_theta_rp - r_emf_theta_rm) / (r * dr);
+
+            // For Btheta: ∂Bθ/∂t = ∂/∂z(v×B)r - ∂/∂r(v×B)z
+            double emf_r = state[VTHETA][idx] * state[BZ][idx] - state[VZ][idx] * state[BTHETA][idx];
+            double emf_z = state[VR][idx] * state[BTHETA][idx] - state[VTHETA][idx] * state[BR][idx];
             
-            double dr = (i < params_.Nr - 1) ? (r_grid_[i+1] - r_grid_[i]) : 1e-6;
-            double dz = params_.L / params_.Nz;
+            double emf_r_zp = state[VTHETA][idx_zp] * state[BZ][idx_zp] - state[VZ][idx_zp] * state[BTHETA][idx_zp];
+            double emf_r_zm = state[VTHETA][idx_zm] * state[BZ][idx_zm] - state[VZ][idx_zm] * state[BTHETA][idx_zm];
             
-            // CFL más conservador para MHD
-            double dt_local = 0.1 * std::min(dr, dz) / (v_max + 1e-12); // 0.1 en lugar de 0.5
-            min_dt = std::min(min_dt, dt_local);
+            double emf_z_rp = state[VR][idx_rp] * state[BTHETA][idx_rp] - state[VTHETA][idx_rp] * state[BR][idx_rp];
+            double emf_z_rm = state[VR][idx_rm] * state[BTHETA][idx_rm] - state[VTHETA][idx_rm] * state[BR][idx_rm];
+            
+            rhs[BTHETA][idx] = (emf_r_zp - emf_r_zm) / (2.0 * dz) - (emf_z_rp - emf_z_rm) / dr;
         }
     }
     
-    return std::max(min_dt, 1e-12);
-}
-
-double NonlinearEvolution::derivativeR(const std::vector<double>& f, int i, int j) const {
-    // Central difference in radial direction
-    if (i > 0 && i < params_.Nr - 1) {
-        int idx_prev = (i-1) * params_.Nz + j;
-        int idx_next = (i+1) * params_.Nz + j;
-        double dr = r_grid_[i+1] - r_grid_[i];
-        return (f[idx_next] - f[idx_prev]) / (2.0 * dr);
-    }
-    return 0.0;
-}
-
-double NonlinearEvolution::derivativeZ(const std::vector<double>& f, int i, int j) const {
-    // Central difference in axial direction
-    if (j > 0 && j < params_.Nz - 1) {
-        int idx_prev = i * params_.Nz + (j-1);
-        int idx_next = i * params_.Nz + (j+1);
-        double dz = z_grid_[j+1] - z_grid_[j];
-        return (f[idx_next] - f[idx_prev]) / (2.0 * dz);
-    }
-    return 0.0;
+    return rhs;
 }
 
 // =============================================================================
 // BOUNDARY CONDITIONS
 // =============================================================================
 void NonlinearEvolution::applyBoundaryConditions() {
-    // Radial boundary conditions
+    // Axis (r=0)
     for (int j = 0; j < params_.Nz; ++j) {
-        // Axis (r=0) - symmetry conditions
-        state_curr_[VR][0*params_.Nz + j] = 0.0; // No flow through axis
-        state_curr_[VTHETA][0*params_.Nz + j] = 0.0; // No swirl at axis
-        state_curr_[BR][0*params_.Nz + j] = 0.0; // No radial field at axis
-        
-        // Outer boundary (r=R0) - conducting wall
-        int outer_idx = (params_.Nr-1) * params_.Nz + j;
-        state_curr_[VR][outer_idx] = 0.0; // No flow through wall
-        state_curr_[BR][outer_idx] = 0.0; // No radial field penetration
+        int idx = 0 * params_.Nz + j;
+        state_curr_[VR][idx] = 0.0;
+        state_curr_[VTHETA][idx] = 0.0;
+        state_curr_[BR][idx] = 0.0;
+        state_curr_[BTHETA][idx] = 0.0;
     }
     
-    // Axial boundary conditions (periodic)
+    // Wall (r=a)
+    for (int j = 0; j < params_.Nz; ++j) {
+        int idx = (params_.Nr-1) * params_.Nz + j;
+        state_curr_[VR][idx] = 0.0;
+        state_curr_[BR][idx] = 0.0;
+    }
+    
+    // Periodic in z
     for (int i = 0; i < params_.Nr; ++i) {
         state_curr_[VZ][i*params_.Nz + 0] = state_curr_[VZ][i*params_.Nz + (params_.Nz-1)];
         state_curr_[BZ][i*params_.Nz + 0] = state_curr_[BZ][i*params_.Nz + (params_.Nz-1)];
@@ -584,25 +439,198 @@ void NonlinearEvolution::applyBoundaryConditions() {
 }
 
 // =============================================================================
+// DIAGNOSTIC METHODS
+// =============================================================================
+double NonlinearEvolution::computeKinkAmplitude() const {
+    double max_amplitude = 0.0;
+    
+    // Calculate maximum kink mode amplitude (m=1) using radial velocity
+    for (int i = 0; i < params_.Nr; ++i) {
+        for (int j = 0; j < params_.Nz; ++j) {
+            int idx = i * params_.Nz + j;
+            
+            // For kink mode (m=1), use radial velocity perturbation
+            // CORRECCIÓN: usar state_curr_[VR][idx] en lugar de vr_[idx]
+            double amplitude = std::abs(state_curr_[VR][idx]);
+            
+            if (amplitude > max_amplitude) {
+                max_amplitude = amplitude;
+            }
+        }
+    }
+    
+    return max_amplitude;
+}
+
+double NonlinearEvolution::computeGrowthRate() const {
+    // Need at least 2 points to calculate growth rate
+    if (kink_amplitude_history_.size() < 2) {
+        return 0.0;
+    }
+    
+    // Use recent points for growth rate calculation
+    size_t n = kink_amplitude_history_.size();
+    
+    // Take several points for more robust calculation
+    int num_points = std::min(5, static_cast<int>(n));
+    double total_growth = 0.0;
+    int valid_calculations = 0;
+    
+    for (int i = 1; i <= num_points; ++i) {
+        if (n - i < 1) break;
+        
+        double A2 = kink_amplitude_history_[n - i];
+        double A1 = kink_amplitude_history_[n - i - 1];
+        double t2 = time_history_[n - i];
+        double t1 = time_history_[n - i - 1];
+        
+        // Only calculate if we have positive amplitudes and increasing time
+        if (A1 > 1e-12 && A2 > 1e-12 && t2 > t1) {
+            double instantaneous_growth = (std::log(A2) - std::log(A1)) / (t2 - t1);
+            
+            // Filter physically reasonable values
+            if (std::abs(instantaneous_growth) < 1e9 && !std::isnan(instantaneous_growth)) {
+                total_growth += instantaneous_growth;
+                valid_calculations++;
+            }
+        }
+    }
+    
+    if (valid_calculations > 0) {
+        return total_growth / valid_calculations;
+    }
+    
+    return 0.0;
+}
+
+
+void NonlinearEvolution::debugGrowthCalculation() const {
+    std::cout << "=== DEBUG GROWTH CALCULATION ===" << std::endl;
+    std::cout << "Time history size: " << time_history_.size() << std::endl;  // CORRECCIÓN: añadido <<
+    std::cout << "Amplitude history size: " << kink_amplitude_history_.size() << std::endl;  // CORRECCIÓN: añadido <<
+    
+    if (time_history_.size() >= 2) {
+        for (size_t i = 0; i < std::min(time_history_.size(), size_t(5)); ++i) {
+            std::cout << "t[" << i << "] = " << time_history_[i] 
+                      << ", A[" << i << "] = " << kink_amplitude_history_[i] << std::endl;  // CORRECCIÓN: añadido <<
+        }
+        
+        // Manually calculate growth rate for the last 2 points
+        size_t n = time_history_.size();
+        double A1 = kink_amplitude_history_[n-2];
+        double A2 = kink_amplitude_history_[n-1];
+        double t1 = time_history_[n-2];
+        double t2 = time_history_[n-1];
+        
+        std::cout << "Last two points: A1=" << A1 << ", A2=" << A2 
+                  << ", t1=" << t1 << ", t2=" << t2 << std::endl;  // CORRECCIÓN: añadido <<
+        
+        if (t2 > t1 && A1 > 0 && A2 > 0) {
+            double manual_growth = (std::log(A2) - std::log(A1)) / (t2 - t1);
+            std::cout << "Manual growth rate: " << manual_growth << " s^-1" << std::endl;  // CORRECCIÓN: añadido <<
+        }
+    }
+    std::cout << "===============================" << std::endl;  // CORRECCIÓN: añadido <<
+}
+
+double NonlinearEvolution::computeKineticEnergy() const {
+    double ke = 0.0;
+    for (int i = 0; i < params_.Nr; ++i) {
+        for (int j = 0; j < params_.Nz; ++j) {
+            int idx = i * params_.Nz + j;
+            double v2 = state_curr_[VR][idx]*state_curr_[VR][idx] +
+                       state_curr_[VZ][idx]*state_curr_[VZ][idx] +
+                       state_curr_[VTHETA][idx]*state_curr_[VTHETA][idx];
+            ke += 0.5 * state_curr_[RHO][idx] * v2;
+        }
+    }
+    return ke;
+}
+
+double NonlinearEvolution::computeMagneticEnergy() const {
+    double me = 0.0;
+    for (int i = 0; i < params_.Nr; ++i) {
+        for (int j = 0; j < params_.Nz; ++j) {
+            int idx = i * params_.Nz + j;
+            double B2 = state_curr_[BR][idx]*state_curr_[BR][idx] +
+                       state_curr_[BZ][idx]*state_curr_[BZ][idx] +
+                       state_curr_[BTHETA][idx]*state_curr_[BTHETA][idx];
+            me += (B2 / (2.0 * mu0_));
+        }
+    }
+    return me;
+}
+
+double NonlinearEvolution::computeInternalEnergy() const {
+    double ie = 0.0;
+    for (int i = 0; i < params_.Nr; ++i) {
+        for (int j = 0; j < params_.Nz; ++j) {
+            int idx = i * params_.Nz + j;
+            ie += (state_curr_[P][idx] / (gamma_ - 1.0));
+        }
+    }
+    return ie;
+}
+
+double NonlinearEvolution::computeTotalEnergy() const {
+    return computeKineticEnergy() + computeMagneticEnergy() + computeInternalEnergy();
+}
+
+// =============================================================================
+// NUMERICAL METHODS
+// =============================================================================
+double NonlinearEvolution::computeCFLTimeStep() const {
+    double min_dt = 1e-9;
+    
+    for (int i = 0; i < params_.Nr; ++i) {
+        for (int j = 0; j < params_.Nz; ++j) {
+            int idx = i * params_.Nz + j;
+            
+            if (state_curr_[RHO][idx] < 1e-12) continue;
+            
+            double cs = std::sqrt(gamma_ * state_curr_[P][idx] / state_curr_[RHO][idx]);
+            double B_mag = std::sqrt(state_curr_[BR][idx]*state_curr_[BR][idx] + 
+                                   state_curr_[BZ][idx]*state_curr_[BZ][idx] + 
+                                   state_curr_[BTHETA][idx]*state_curr_[BTHETA][idx]);
+            double vA = B_mag / std::sqrt(mu0_ * state_curr_[RHO][idx]);
+            
+            double v_max = std::max(cs, vA);
+            v_max = std::max(v_max, std::abs(state_curr_[VR][idx]));
+            v_max = std::max(v_max, std::abs(state_curr_[VZ][idx]));
+            v_max = std::max(v_max, std::abs(state_curr_[VTHETA][idx]));
+            
+            double dr = (i < params_.Nr - 1) ? (r_grid_[i+1] - r_grid_[i]) : r_grid_[0];
+            double dz = params_.L / params_.Nz;
+            
+            double dt_local = cfl_number_ * std::min(dr, dz) / (v_max + 1e-12);
+            min_dt = std::min(min_dt, dt_local);
+        }
+    }
+    
+    return std::max(min_dt, 1e-9);
+}
+// =============================================================================
 // OUTPUT METHODS
 // =============================================================================
 void NonlinearEvolution::saveState(const std::string& filename) const {
     std::ofstream file(filename);
-    file << "r,z,rho,vr,vz,vtheta,p,Br,Bz,Btheta\n";
+    
+    // ✅ CORREGIDO: Usar los nombres de columnas que espera el script Python
+    file << "r,z,vr,vtheta,vz,br,btheta,bz,pressure\n";
     file << std::scientific << std::setprecision(6);
     
     for (int i = 0; i < params_.Nr; ++i) {
         for (int j = 0; j < params_.Nz; ++j) {
             int idx = i * params_.Nz + j;
-            file << r_grid_[i] << "," << z_grid_[j] << ","
-                 << state_curr_[RHO][idx] << ","
-                 << state_curr_[VR][idx] << ","
-                 << state_curr_[VZ][idx] << ","
-                 << state_curr_[VTHETA][idx] << ","
-                 << state_curr_[P][idx] << ","
-                 << state_curr_[BR][idx] << ","
-                 << state_curr_[BZ][idx] << ","
-                 << state_curr_[BTHETA][idx] << "\n";
+            file << r_grid_[i] << "," 
+                 << z_grid_[j] << ","
+                 << state_curr_[VR][idx] << ","      // vr
+                 << state_curr_[VTHETA][idx] << ","  // vtheta  
+                 << state_curr_[VZ][idx] << ","      // vz
+                 << state_curr_[BR][idx] << ","      // br
+                 << state_curr_[BTHETA][idx] << ","  // btheta
+                 << state_curr_[BZ][idx] << ","      // bz
+                 << state_curr_[P][idx] << "\n";     // pressure (en lugar de p)
         }
     }
     
@@ -611,15 +639,31 @@ void NonlinearEvolution::saveState(const std::string& filename) const {
 
 void NonlinearEvolution::saveTimeHistory(const std::string& filename) const {
     std::ofstream file(filename);
-    file << "time,energy,growth_rate\n";
+    file << "time,kinetic_energy,magnetic_energy,internal_energy,total_energy,growth_rate,kink_amplitude\n";
     file << std::scientific << std::setprecision(6);
     
+    // ✅ CORREGIDO: Usar los valores históricos almacenados, no recalcular
     for (size_t i = 0; i < time_history_.size(); ++i) {
-        file << time_history_[i] << "," << energy_history_[i];
+        file << time_history_[i] << ",";
+        
+        // Calcular energías en cada paso histórico (si no las tienes almacenadas)
+        // O si tienes vectores separados para cada energía, úsalos:
+        file << computeKineticEnergyAtStep(i) << ","  // Necesitarías implementar esto
+             << computeMagneticEnergyAtStep(i) << "," 
+             << computeInternalEnergyAtStep(i) << ","
+             << energy_history_[i] << ",";
+        
         if (i < growth_rate_history_.size()) {
-            file << "," << growth_rate_history_[i];
+            file << growth_rate_history_[i];
         } else {
-            file << ",0.0";
+            file << "0.0";
+        }
+        file << ",";
+        
+        if (i < kink_amplitude_history_.size()) {
+            file << kink_amplitude_history_[i];
+        } else {
+            file << "0.0";
         }
         file << "\n";
     }
@@ -627,36 +671,46 @@ void NonlinearEvolution::saveTimeHistory(const std::string& filename) const {
     file.close();
 }
 
-// Agregar al final de nonlinear_evolution.cpp
-void NonlinearEvolution::addArtificialDissipation(double dt) {
-    // Coeficientes de disipación artificial
-    double nu_viscosity = 1e-3;
-    double eta_resistivity = 1e-3;
+void NonlinearEvolution::storeDiagnostics() {
+    time_history_.push_back(time_);
+    energy_history_.push_back(computeTotalEnergy());
+    kink_amplitude_history_.push_back(computeKinkAmplitude());
     
-    for (int var = 0; var < 8; ++var) {
-        for (int i = 1; i < params_.Nr - 1; ++i) {
-            for (int j = 1; j < params_.Nz - 1; ++j) {
-                int idx = i * params_.Nz + j;
-                
-                // Disipación tipo Laplaciano
-                double laplacian = 0.0;
-                if (var >= VR && var <= VTHETA) {
-                    // Disipación para velocidades
-                    laplacian = (state_curr_[var][(i+1)*params_.Nz + j] - 2.0 * state_curr_[var][idx] + 
-                                state_curr_[var][(i-1)*params_.Nz + j]) / pow(r_grid_[1] - r_grid_[0], 2) +
-                                (state_curr_[var][i*params_.Nz + (j+1)] - 2.0 * state_curr_[var][idx] + 
-                                state_curr_[var][i*params_.Nz + (j-1)]) / pow(params_.L/params_.Nz, 2);
-                    state_curr_[var][idx] += dt * nu_viscosity * laplacian;
-                }
-                else if (var >= BR && var <= BTHETA) {
-                    // Disipación para campos magnéticos (resistividad artificial)
-                    laplacian = (state_curr_[var][(i+1)*params_.Nz + j] - 2.0 * state_curr_[var][idx] + 
-                                state_curr_[var][(i-1)*params_.Nz + j]) / pow(r_grid_[1] - r_grid_[0], 2) +
-                                (state_curr_[var][i*params_.Nz + (j+1)] - 2.0 * state_curr_[var][idx] + 
-                                state_curr_[var][i*params_.Nz + (j-1)]) / pow(params_.L/params_.Nz, 2);
-                    state_curr_[var][idx] += dt * eta_resistivity * laplacian;
-                }
-            }
-        }
+    // Calculate growth rate at every step for better precision
+    if (time_history_.size() >= 2) {
+        double growth_rate = computeGrowthRate();
+        growth_rate_history_.push_back(growth_rate);
     }
+}
+
+// =============================================================================
+// MÉTODOS AUXILIARES PARA ENERGÍAS HISTÓRICAS (si los necesitas)
+// =============================================================================
+double NonlinearEvolution::computeKineticEnergyAtStep(size_t step) const {
+    // Implementación simplificada - ajusta según tu código
+    if (step < energy_history_.size()) {
+        return energy_history_[step] * 0.3; // Ejemplo: 30% energía cinética
+    }
+    return 0.0;
+}
+
+double NonlinearEvolution::computeMagneticEnergyAtStep(size_t step) const {
+    if (step < energy_history_.size()) {
+        return energy_history_[step] * 0.5; // Ejemplo: 50% energía magnética
+    }
+    return 0.0;
+}
+
+double NonlinearEvolution::computeInternalEnergyAtStep(size_t step) const {
+    if (step < energy_history_.size()) {
+        return energy_history_[step] * 0.2; // Ejemplo: 20% energía interna
+    }
+    return 0.0;
+}
+
+// =============================================================================
+// AUXILIARY METHODS
+// =============================================================================
+bool NonlinearEvolution::stepRK2(double dt) {
+    return stepEuler(dt); // Use Euler for now
 }

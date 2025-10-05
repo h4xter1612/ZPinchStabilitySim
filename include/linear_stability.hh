@@ -6,6 +6,10 @@
 #include <vector>
 #include <complex>
 #include <memory>
+#include <fstream>  // NECESARIO PARA ofstream
+#include <cmath>    // NECESARIO PARA exp, pow
+
+
 
 class LinearStabilityAnalyzer {
 private:
@@ -29,6 +33,8 @@ public:
     // EQUILIBRIUM CALCULATION
     // =========================================================================
     
+    void computeCurrentFromBtheta();
+    
     // Calculates Z-pinch equilibrium (force balance j×B = ∇p)
     void computeEquilibrium();
     
@@ -51,7 +57,7 @@ public:
         std::vector<double> eigenfunction; // Radial eigenfunction
     };
     
-    KinkModeResult analyzeKinkMode(double k);
+    KinkModeResult analyzeKinkMode(double k) const;
     
     // Analyzes sausage mode (m=0)  
     struct SausageModeResult {
@@ -62,23 +68,30 @@ public:
         std::vector<double> eigenfunction;
     };
     
-    SausageModeResult analyzeSausageMode(double k);
+    SausageModeResult analyzeSausageMode(double k) const;
     
     // k-scan to find unstable modes
     std::vector<KinkModeResult> kinkStabilityScan();
     std::vector<SausageModeResult> sausageStabilityScan();
     
     // =========================================================================
-    // HELPER METHODS
+    // STABILITY CRITERIA
     // =========================================================================
     
     // Kruskal-Shafranov stability criterion
     double kruskalShafranovLimit() const;
+
+    // =========================================================================
+    // DATA EXPORT METHODS
+    // =========================================================================
+    void exportEigenfunctions(const std::string& filename) const;
     
     // Sausage mode stability criterion
     double sausageStabilityCriterion() const;
     
-    // Get equilibrium grids and fields
+    // =========================================================================
+    // PROFILE GETTERS
+    // =========================================================================
     const std::vector<double>& getRadialGrid() const { return r_grid_; }
     const std::vector<double>& getPressureProfile() const { return p_eq_; }
     const std::vector<double>& getBthetaProfile() const { return Btheta_eq_; }
@@ -90,13 +103,6 @@ private:
     
     // Initializes radial grid
     void initializeGrid();
-    
-    // Solves eigenvalue equation for given mode
-    std::complex<double> solveEigenvalueEquation(int m, double k);
-    
-    // Computes eigenfunction for a mode
-    std::vector<double> computeEigenfunction(int m, double k, 
-                                           std::complex<double> omega);
 };
 
 #endif

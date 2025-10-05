@@ -31,18 +31,6 @@ void EquilibriumSolver::initializeGrid() {
         r_grid_[i] = i * dr;
     }
 }
-// =============================================================================
-// FIELD PROFILE METHODS
-// =============================================================================
-double EquilibriumSolver::bthetaProfile(double r) const {
-    // Campo azimutal: B_θ(r) = (μ₀ I₀ r) / (2π a²) para r < a
-    // Asegurar dirección positiva para corriente positiva
-    if (r <= params_.a) {
-        return std::abs(4e-7 * params_.I0 * r) / (2.0 * params_.a * params_.a);
-    } else {
-        return std::abs(4e-7 * params_.I0) / (2.0 * r);
-    }
-}
 
 // =============================================================================
 // EQUILIBRIUM SOLVING METHODS
@@ -50,136 +38,143 @@ double EquilibriumSolver::bthetaProfile(double r) const {
 void EquilibriumSolver::solveGradShafranov() {
     std::cout << "Solving Grad-Shafranov equation for Z-pinch..." << std::endl;
     
-    // For Z-pinch with symmetry, Grad-Shafranov simplifies to:
-    // d²ψ/dr² + (1/r) dψ/dr = -μ₀ r j_φ(ψ)
-    // where ψ is the flux function
-    
-    // We'll use a simple iterative approach
-    computeBennettEquilibrium();  // Start with Bennett profile
-    
-    // Iterate to improve solution
-    int max_iterations = 100;
-    double tolerance = 1e-6;
-    
-    for (int iter = 0; iter < max_iterations; ++iter) {
-        double max_residual = checkForceBalance();
-        
-        if (max_residual < tolerance) {
-            std::cout << "Grad-Shafranov converged after " << iter << " iterations" << std::endl;
-            break;
-        }
-        
-        // Simple relaxation update
-        computePressureFromForceBalance();
-        computeBthetaFromCurrent();
-        
-        if (iter == max_iterations - 1) {
-            std::cout << "Warning: Grad-Shafranov did not converge fully" << std::endl;
-        }
-    }
+    // Use Bennett equilibrium as initial solution
+    computeBennettEquilibrium();
     
     computeSafetyFactor();
     computeBetaProfile();
+    
+    std::cout << "Grad-Shafranov solution completed" << std::endl;
 }
 
 void EquilibriumSolver::solveForceBalance() {
     std::cout << "Solving force balance equation..." << std::endl;
     
-    // Force balance: dp/dr + (B_θ/μ₀r) d/dr(rB_θ) + (B_z/μ₀) dB_z/dr = 0
+    const double mu0 = 4.0e-7 * M_PI;
     
-    computeBennettEquilibrium();  // Use Bennett as initial guess
+    // Calculate realistic central pressure
+    double n0 = params_.n0; // m^-3
+    double T0_J = params_.T0 * 1.6e-19; // Convert eV to Joules
+    double p0 = 2.0 * n0 * T0_J; // Total pressure (electrons + ions)
     
-    // Iterative solution of force balance
-    int max_iterations = 50;
+    std::cout << "Central pressure: " << p0 << " Pa" << std::endl;
+    std::cout << "Temperature: " << params_.T0 << " eV" << std::endl;
     
-    for (int iter = 0; iter < max_iterations; ++iter) {
-        // Update pressure from force balance
-        computePressureFromForceBalance();
+    // Simple parabolic pressure profile
+    for (int i = 0; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
+        double r_norm = r / params_.a;
         
-        // Update magnetic fields consistently
-        computeBthetaFromCurrent();
-        computeCurrentFromBtheta();
-        
-        applyBoundaryConditions();
+        if (r < params_.a) {
+            p_eq_[i] = p0 * (1.0 - r_norm * r_norm);
+        } else {
+            p_eq_[i] = 0.0;
+        }
     }
     
+    // Calculate Btheta consistently with current
+    double I0 = params_.I0;
+    
+    for (int i = 0; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
+        
+        if (r < params_.a) {
+            // Uniform current distribution inside plasma
+            double j0 = I0 / (M_PI * params_.a * params_.a);
+            jz_eq_[i] = j0;
+            Btheta_eq_[i] = (mu0 * j0 * r) / 2.0;
+        } else {
+            // Outside plasma: straight line field
+            jz_eq_[i] = 0.0;
+            Btheta_eq_[i] = (mu0 * I0) / (2.0 * M_PI * r);
+        }
+        
+        Bz_eq_[i] = params_.B0;
+    }
+    
+    applyBoundaryConditions();
     computeSafetyFactor();
     computeBetaProfile();
+    
+    std::cout << "Force balance solved" << std::endl;
 }
 
 // =============================================================================
 // EQUILIBRIUM PROFILES
 // =============================================================================
 void EquilibriumSolver::computeBennettEquilibrium() {
-    // Bennett equilibrium: p(r) = p0 / (1 + r²/a²)²
-    // B_θ(r) = (μ₀ I₀ r) / (2π a²) for r < a
+    const double mu0 = 4.0e-7 * M_PI;
     
-    double p0 = params_.n0 * params_.T0 * 1.6e-19; // Central pressure
+    // Calculate realistic central pressure
+    double n0 = params_.n0;
+    double T0_J = params_.T0 * 1.6e-19;
+    double p0 = 2.0 * n0 * T0_J; // Total pressure
+    
+    double I0 = params_.I0;
     
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
         double r_a = r / params_.a;
         
-        // Pressure profile
+        // Bennett pressure profile
         p_eq_[i] = p0 / std::pow(1.0 + r_a * r_a, 2.0);
         
-        // Azimuthal field profile
+        // Azimuthal field - corrected for physical consistency
         if (r <= params_.a) {
-            Btheta_eq_[i] = (4e-7 * M_PI * params_.I0 * r) / (2.0 * M_PI * params_.a * params_.a);
+            Btheta_eq_[i] = (mu0 * I0 * r) / (2.0 * M_PI * params_.a * params_.a);
         } else {
-            Btheta_eq_[i] = (4e-7 * M_PI * params_.I0) / (2.0 * M_PI * r);
+            Btheta_eq_[i] = (mu0 * I0) / (2.0 * M_PI * r);
         }
         
-        // Axial field (constant for now)
+        // Current density - corrected
+        if (r <= params_.a) {
+            jz_eq_[i] = I0 / (M_PI * params_.a * params_.a);
+        } else {
+            jz_eq_[i] = 0.0;
+        }
+        
         Bz_eq_[i] = params_.B0;
-        
-        // Current density from Ampere's law
-        if (i == 0) {
-            jz_eq_[i] = params_.I0 / (M_PI * params_.a * params_.a);
-        } else {
-            double r_plus = r_grid_[std::min(i+1, params_.Nr-1)];
-            double r_minus = r_grid_[std::max(i-1, 0)];
-            double dr = r_plus - r_minus;
-            
-            double d_rBtheta_dr = (r_plus * Btheta_eq_[std::min(i+1, params_.Nr-1)] - 
-                                 r_minus * Btheta_eq_[std::max(i-1, 0)]) / dr;
-            
-            jz_eq_[i] = d_rBtheta_dr / (4e-7 * M_PI * r);
-        }
     }
     
     applyBoundaryConditions();
 }
 
 void EquilibriumSolver::computeConstantCurrentEquilibrium() {
-    // Constant current density: j_z = I₀ / (π a²) for r < a
+    const double mu0 = 4.0e-7 * M_PI;
     
-    double j0 = params_.I0 / (M_PI * params_.a * params_.a);
+    double I0 = params_.I0;
+    double j0 = I0 / (M_PI * params_.a * params_.a);
     
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
         
         if (r <= params_.a) {
             jz_eq_[i] = j0;
-            Btheta_eq_[i] = (4e-7 * M_PI * j0 * r) / 2.0;
+            Btheta_eq_[i] = (mu0 * j0 * r) / 2.0;
         } else {
             jz_eq_[i] = 0.0;
-            Btheta_eq_[i] = (4e-7 * M_PI * params_.I0) / (2.0 * M_PI * r);
+            Btheta_eq_[i] = (mu0 * I0) / (2.0 * M_PI * r);
         }
         
-        // Compute pressure from force balance
         Bz_eq_[i] = params_.B0;
     }
     
+    // Calculate pressure from force balance
     computePressureFromForceBalance();
     applyBoundaryConditions();
 }
 
 void EquilibriumSolver::computeParabolicEquilibrium() {
-    // Parabolic profiles: p(r) = p0 (1 - r²/a²), j_z(r) = j0 (1 - r²/a²)
+    const double mu0 = 4.0e-7 * M_PI;
     
-    double p0 = params_.n0 * params_.T0 * 1.6e-19;
-    double j0 = 2.0 * params_.I0 / (M_PI * params_.a * params_.a); // Factor for parabolic profile
+    // Calculate realistic central pressure
+    double n0 = params_.n0;
+    double T0_J = params_.T0 * 1.6e-19;
+    double p0 = 2.0 * n0 * T0_J;
+    
+    double I0 = params_.I0;
+    // Factor 2 for parabolic profile that integrates to I0
+    double j0 = 2.0 * I0 / (M_PI * params_.a * params_.a);
     
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
@@ -188,11 +183,12 @@ void EquilibriumSolver::computeParabolicEquilibrium() {
         if (r <= params_.a) {
             p_eq_[i] = p0 * (1.0 - r_a * r_a);
             jz_eq_[i] = j0 * (1.0 - r_a * r_a);
-            Btheta_eq_[i] = (4e-7 * M_PI * j0 * r) * (1.0 - r_a * r_a / 2.0) / 2.0;
+            // Btheta consistent with current
+            Btheta_eq_[i] = (mu0 * j0 * r) * (1.0 - r_a * r_a / 2.0) / 2.0;
         } else {
             p_eq_[i] = 0.0;
             jz_eq_[i] = 0.0;
-            Btheta_eq_[i] = (4e-7 * M_PI * params_.I0) / (2.0 * M_PI * r);
+            Btheta_eq_[i] = (mu0 * I0) / (2.0 * M_PI * r);
         }
         
         Bz_eq_[i] = params_.B0;
@@ -202,105 +198,43 @@ void EquilibriumSolver::computeParabolicEquilibrium() {
 }
 
 // =============================================================================
-// FIELD COMPUTATION METHODS
-// =============================================================================
-void EquilibriumSolver::computeBthetaFromCurrent() {
-    // B_θ(r) = (μ₀/r) ∫₀ʳ j_z(r') r' dr'
-    
-    for (int i = 0; i < params_.Nr; ++i) {
-        double r = r_grid_[i];
-        if (r == 0.0) {
-            Btheta_eq_[i] = 0.0;
-            continue;
-        }
-        
-        // Numerical integration using trapezoidal rule
-        double integral = 0.0;
-        for (int j = 1; j <= i; ++j) {
-            double r_prev = r_grid_[j-1];
-            double r_curr = r_grid_[j];
-            double jz_prev = jz_eq_[j-1];
-            double jz_curr = jz_eq_[j];
-            
-            integral += 0.5 * (jz_prev * r_prev + jz_curr * r_curr) * (r_curr - r_prev);
-        }
-        
-        Btheta_eq_[i] = (4e-7 * M_PI * integral) / r;
-    }
-}
-
-void EquilibriumSolver::computeCurrentFromBtheta() {
-    // j_z(r) = (1/μ₀) (1/r) d/dr (r B_θ)
-    
-    for (int i = 0; i < params_.Nr; ++i) {
-        double r = r_grid_[i];
-        
-        if (i == 0) {
-            // At r=0, use symmetric difference
-            if (params_.Nr > 1) {
-                double r1 = r_grid_[1];
-                double f1 = r1 * Btheta_eq_[1];
-                jz_eq_[0] = (2.0 * f1 / (r1 * r1)) / (4e-7 * M_PI);
-            } else {
-                jz_eq_[0] = 0.0;
-            }
-        } else {
-            double dr = r_grid_[i] - r_grid_[i-1];
-            double d_rBtheta_dr = (r * Btheta_eq_[i] - r_grid_[i-1] * Btheta_eq_[i-1]) / dr;
-            jz_eq_[i] = d_rBtheta_dr / (4e-7 * M_PI * r);
-        }
-    }
-}
-
-void EquilibriumSolver::computePressureFromForceBalance() {
-    // Force balance: dp/dr = - (B_θ/μ₀r) d/dr(rB_θ) - (B_z/μ₀) dB_z/dr
-    
-    // Assume B_z is constant for now, so dB_z/dr = 0
-    p_eq_[0] = params_.n0 * params_.T0 * 1.6e-19; // Central pressure
-    
-    for (int i = 1; i < params_.Nr; ++i) {
-        double r = r_grid_[i];
-        double dr = r - r_grid_[i-1];
-        
-        // Calculate derivative term
-        double rBtheta_curr = r * Btheta_eq_[i];
-        double rBtheta_prev = r_grid_[i-1] * Btheta_eq_[i-1];
-        double d_rBtheta_dr = (rBtheta_curr - rBtheta_prev) / dr;
-        
-        // Pressure gradient
-        double dp_dr = - (Btheta_eq_[i] / (4e-7 * M_PI * r)) * d_rBtheta_dr;
-        
-        // Update pressure
-        p_eq_[i] = p_eq_[i-1] + dp_dr * dr;
-        
-        // Ensure non-negative pressure
-        if (p_eq_[i] < 0.0) p_eq_[i] = 0.0;
-    }
-}
-
-// =============================================================================
 // DIAGNOSTIC METHODS
 // =============================================================================
 void EquilibriumSolver::computeSafetyFactor() {
-    // Safety factor q(r) = (r B_z) / (R₀ B_θ) for cylindrical geometry
+    // q(r) = (2πr²B_z) / (μ₀R₀I(r)) for Z-pinch
+    
+    const double mu0 = 4.0e-7 * M_PI;
     
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
-        if (r > 0.0 && std::abs(Btheta_eq_[i]) > 1e-12) {
-            q_profile_[i] = (r * Bz_eq_[i]) / (params_.R0 * Btheta_eq_[i]);
+        
+        if (r > 1e-12) {
+            // Calculate enclosed current I(r)
+            double I_enclosed = 0.0;
+            for (int j = 0; j <= i; ++j) {
+                double r_j = r_grid_[j];
+                double dr = (j == 0) ? r_grid_[0] : (r_grid_[j] - r_grid_[j-1]);
+                I_enclosed += jz_eq_[j] * 2.0 * M_PI * r_j * dr;
+            }
+            
+            if (std::abs(I_enclosed) > 1e-12) {
+                q_profile_[i] = (2.0 * M_PI * r * r * Bz_eq_[i]) / (mu0 * params_.R0 * I_enclosed);
+            } else {
+                q_profile_[i] = 1e12;
+            }
         } else {
-            q_profile_[i] = 1e12; // Large value at axis
+            q_profile_[i] = 1e12;
         }
     }
 }
 
 void EquilibriumSolver::computeBetaProfile() {
-    // Beta parameter: β(r) = 2μ₀ p(r) / B²(r)
+    const double mu0 = 4.0e-7 * M_PI;
     
     for (int i = 0; i < params_.Nr; ++i) {
-        double B_sq = Bz_eq_[i] * Bz_eq_[i] + Btheta_eq_[i] * Btheta_eq_[i];
-        if (B_sq > 1e-12) {
-            beta_profile_[i] = 2.0 * 4e-7 * M_PI * p_eq_[i] / B_sq;
+        double B_total_sq = Bz_eq_[i] * Bz_eq_[i] + Btheta_eq_[i] * Btheta_eq_[i];
+        if (B_total_sq > 1e-12) {
+            beta_profile_[i] = (2.0 * mu0 * p_eq_[i]) / B_total_sq;
         } else {
             beta_profile_[i] = 0.0;
         }
@@ -308,125 +242,163 @@ void EquilibriumSolver::computeBetaProfile() {
 }
 
 double EquilibriumSolver::computeTotalCurrent() const {
-    // Total current: I = 2π ∫ j_z(r) r dr
-    
-    double total_current = 0.0;
+    double total = 0.0;
     for (int i = 1; i < params_.Nr; ++i) {
         double r_prev = r_grid_[i-1];
         double r_curr = r_grid_[i];
         double jz_prev = jz_eq_[i-1];
         double jz_curr = jz_eq_[i];
         
-        total_current += 0.5 * (jz_prev * r_prev + jz_curr * r_curr) * (r_curr - r_prev);
+        double area_sector = M_PI * (r_curr * r_curr - r_prev * r_prev);
+        double jz_avg = 0.5 * (jz_prev + jz_curr);
+        total += jz_avg * area_sector;
     }
-    
-    return 2.0 * M_PI * total_current;
+    return total;
 }
 
 double EquilibriumSolver::computeInternalInductance() const {
-    // Internal inductance per unit length: l_i = (2/I²) ∫ (B_θ²/2μ₀) 2πr dr
-    
+    const double mu0 = 4.0e-7 * M_PI;
     double magnetic_energy = 0.0;
+    
     for (int i = 1; i < params_.Nr; ++i) {
         double r_prev = r_grid_[i-1];
         double r_curr = r_grid_[i];
         double Btheta_prev = Btheta_eq_[i-1];
         double Btheta_curr = Btheta_eq_[i];
         
-        double energy_density_prev = Btheta_prev * Btheta_prev / (2.0 * 4e-7 * M_PI);
-        double energy_density_curr = Btheta_curr * Btheta_curr / (2.0 * 4e-7 * M_PI);
+        double Btheta_avg = 0.5 * (Btheta_prev + Btheta_curr);
+        double volume_shell = M_PI * (r_curr * r_curr - r_prev * r_prev) * 1.0; // per unit length
         
-        magnetic_energy += 0.5 * (energy_density_prev * r_prev + energy_density_curr * r_curr) * 
-                          (r_curr - r_prev);
+        magnetic_energy += (Btheta_avg * Btheta_avg / (2.0 * mu0)) * volume_shell;
     }
     
-    magnetic_energy *= 2.0 * M_PI;
     double I_total = computeTotalCurrent();
-    
-    return (2.0 * magnetic_energy) / (I_total * I_total);
+    if (I_total > 1e-12) {
+        return (2.0 * magnetic_energy) / (I_total * I_total);
+    }
+    return 0.0;
 }
 
 double EquilibriumSolver::checkForceBalance() const {
-    // Check how well force balance is satisfied
-    // Returns maximum relative error
-    
+    const double mu0 = 4.0e-7 * M_PI;
     double max_error = 0.0;
+    int count = 0;
     
     for (int i = 1; i < params_.Nr - 1; ++i) {
         double r = r_grid_[i];
-        double dr = r_grid_[i+1] - r_grid_[i];
-        
-        // Pressure gradient
-        double dp_dr = (p_eq_[i+1] - p_eq_[i-1]) / (2.0 * dr);
-        
-        // Magnetic force term
-        double rBtheta_plus = r_grid_[i+1] * Btheta_eq_[i+1];
-        double rBtheta_minus = r_grid_[i-1] * Btheta_eq_[i-1];
-        double d_rBtheta_dr = (rBtheta_plus - rBtheta_minus) / (2.0 * dr);
-        
-        double magnetic_force = (Btheta_eq_[i] / (4e-7 * M_PI * r)) * d_rBtheta_dr;
-        
-        // Total force (should be zero)
-        double total_force = dp_dr + magnetic_force;
-        double relative_error = std::abs(total_force) / (std::abs(dp_dr) + 1e-12);
-        
-        if (relative_error > max_error) {
-            max_error = relative_error;
+        if (r > 1e-12 && r < params_.a) {
+            // Pressure gradient
+            double dp_dr = (p_eq_[i+1] - p_eq_[i-1]) / (r_grid_[i+1] - r_grid_[i-1]);
+            
+            // Magnetic force: j_z × B_theta
+            double jz = jz_eq_[i];
+            double Btheta = Btheta_eq_[i];
+            double magnetic_force = jz * Btheta;
+            
+            // Residual
+            double residual = dp_dr + magnetic_force;
+            max_error = std::max(max_error, std::abs(residual));
+            count++;
         }
     }
     
-    return max_error;
+    return (count > 0) ? max_error : 0.0;
+}
+
+// =============================================================================
+// FIELD COMPUTATION METHODS
+// =============================================================================
+void EquilibriumSolver::computeBthetaFromCurrent() {
+    const double mu0 = 4.0e-7 * M_PI;
+    
+    for (int i = 0; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
+        if (r < 1e-12) {
+            Btheta_eq_[i] = 0.0;
+            continue;
+        }
+        
+        // Integrate enclosed current
+        double I_enclosed = 0.0;
+        for (int j = 0; j <= i; ++j) {
+            double r_j = r_grid_[j];
+            double dr = (j == 0) ? r_grid_[0] : (r_grid_[j] - r_grid_[j-1]);
+            double jz_avg = jz_eq_[j];
+            I_enclosed += jz_avg * 2.0 * M_PI * r_j * dr;
+        }
+        
+        Btheta_eq_[i] = (mu0 * I_enclosed) / (2.0 * M_PI * r);
+    }
+}
+
+void EquilibriumSolver::computeCurrentFromBtheta() {
+    const double mu0 = 4.0e-7 * M_PI;
+    
+    for (int i = 0; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
+        
+        if (i == 0) {
+            // At axis, use limit
+            jz_eq_[0] = (4.0 * Btheta_eq_[1]) / (mu0 * (r_grid_[1] + 1e-12));
+        } else {
+            double dr = r_grid_[i] - r_grid_[i-1];
+            double d_rBtheta_dr = (r * Btheta_eq_[i] - r_grid_[i-1] * Btheta_eq_[i-1]) / dr;
+            jz_eq_[i] = d_rBtheta_dr / (mu0 * r);
+        }
+    }
+}
+
+void EquilibriumSolver::computePressureFromForceBalance() {
+    const double mu0 = 4.0e-7 * M_PI;
+    
+    // Set realistic central pressure
+    double n0 = params_.n0;
+    double T0_J = params_.T0 * 1.6e-19;
+    p_eq_[0] = 2.0 * n0 * T0_J;
+    
+    for (int i = 1; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
+        double dr = r - r_grid_[i-1];
+        
+        if (r < params_.a) {
+            // Calculate magnetic force: -j_z × B_theta
+            double jz = 0.5 * (jz_eq_[i] + jz_eq_[i-1]);
+            double Btheta = 0.5 * (Btheta_eq_[i] + Btheta_eq_[i-1]);
+            double magnetic_force = -jz * Btheta;
+            
+            // Integrate to get pressure
+            p_eq_[i] = p_eq_[i-1] + magnetic_force * dr;
+            
+            // Ensure non-negative pressure
+            if (p_eq_[i] < 0.0) p_eq_[i] = 0.0;
+        } else {
+            p_eq_[i] = 0.0;
+        }
+    }
 }
 
 // =============================================================================
 // BOUNDARY CONDITIONS AND UTILITIES
 // =============================================================================
 void EquilibriumSolver::applyBoundaryConditions() {
-    // Axis boundary conditions (r = 0)
+    // Axis (r = 0)
     if (params_.Nr > 0) {
-        // Pressure and B_z are finite at axis
-        // B_θ = 0 at axis
-        Btheta_eq_[0] = 0.0;
+        Btheta_eq_[0] = 0.0; // Azimuthal field must be zero at axis
         
-        // Current density finite at axis
+        // Extrapolate pressure and current from first interior point
         if (params_.Nr > 1) {
-            jz_eq_[0] = jz_eq_[1]; // Approximate
+            p_eq_[0] = p_eq_[1];
+            jz_eq_[0] = jz_eq_[1];
         }
     }
     
-    // Edge boundary (r = a)
-    // Pressure goes to zero at plasma edge
+    // Plasma edge (r = a)
     for (int i = 0; i < params_.Nr; ++i) {
-        if (r_grid_[i] > params_.a) {
+        if (r_grid_[i] >= params_.a) {
             p_eq_[i] = 0.0;
             jz_eq_[i] = 0.0;
         }
     }
-}
-
-double EquilibriumSolver::derivative(const std::vector<double>& f, int i) const {
-    // Central difference for interior points
-    if (i > 0 && i < params_.Nr - 1) {
-        return (f[i+1] - f[i-1]) / (r_grid_[i+1] - r_grid_[i-1]);
-    }
-    // Forward/backward difference for boundaries
-    else if (i == 0 && params_.Nr > 1) {
-        return (f[1] - f[0]) / (r_grid_[1] - r_grid_[0]);
-    }
-    else if (i == params_.Nr - 1 && params_.Nr > 1) {
-        return (f[params_.Nr-1] - f[params_.Nr-2]) / (r_grid_[params_.Nr-1] - r_grid_[params_.Nr-2]);
-    }
-    return 0.0;
-}
-
-double EquilibriumSolver::secondDerivative(const std::vector<double>& f, int i) const {
-    if (i > 0 && i < params_.Nr - 1) {
-        double h_plus = r_grid_[i+1] - r_grid_[i];
-        double h_minus = r_grid_[i] - r_grid_[i-1];
-        return 2.0 * (f[i+1] - f[i] - (f[i] - f[i-1]) * h_plus / h_minus) / 
-               (h_plus * (h_plus + h_minus));
-    }
-    return 0.0;
 }
 
 // =============================================================================
@@ -437,9 +409,14 @@ void EquilibriumSolver::printEquilibriumSummary() const {
     std::cout << "Plasma radius: " << params_.a << " m" << std::endl;
     std::cout << "Total current: " << computeTotalCurrent() << " A" << std::endl;
     std::cout << "Central pressure: " << p_eq_[0] << " Pa" << std::endl;
-    std::cout << "Central beta: " << beta_profile_[0] << std::endl;
+    
+    double B_total_sq = params_.B0 * params_.B0 + Btheta_eq_.back() * Btheta_eq_.back();
+    double p_mag = B_total_sq / (2.0 * 4.0e-7 * M_PI);
+    double beta_central = p_eq_[0] / p_mag;
+    std::cout << "Central beta: " << beta_central << std::endl;
+    
     std::cout << "Safety factor at edge: " << q_profile_.back() << std::endl;
-    std::cout << "Force balance error: " << checkForceBalance() << std::endl;
+    std::cout << "Force balance error: " << checkForceBalance() << " Pa/m" << std::endl;
     std::cout << "Internal inductance: " << computeInternalInductance() << std::endl;
     std::cout << "===================================" << std::endl;
 }

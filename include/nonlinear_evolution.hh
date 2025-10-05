@@ -6,7 +6,12 @@
 #include "linear_stability.hh"
 #include <vector>
 #include <memory>
-#include <functional>
+#include <string>
+#include <iostream>
+#include <iomanip>
+#include <string>
+#include <cmath>
+#include <chrono>
 
 class NonlinearEvolution {
 private:
@@ -18,12 +23,9 @@ private:
     std::vector<double> z_grid_;
     
     // Primary variables: [ρ, v_r, v_z, v_θ, p, B_r, B_z, B_θ]
-    std::vector<std::vector<double>> state_curr_;  // Current state
-    std::vector<std::vector<double>> state_next_;  // Next state
-    std::vector<std::vector<double>> state_temp_;  // Temporary state for RK steps
-    
-    // Perturbation fields
-    std::vector<std::vector<double>> perturbation_;
+    std::vector<std::vector<double>> state_curr_;
+    std::vector<std::vector<double>> state_next_;
+    std::vector<std::vector<double>> state_temp_;
     
     // Time tracking
     double time_;
@@ -33,151 +35,74 @@ private:
     std::vector<double> time_history_;
     std::vector<double> energy_history_;
     std::vector<double> growth_rate_history_;
+    std::vector<double> kink_amplitude_history_;
+
+    // Numerical parameters
+    double cfl_number_ = 0.3;
+    bool enable_divB_cleaning_ = true;
+    double divB_cleaning_coeff_ = 0.1;
+    double artificial_viscosity_ = 1e-6;
     
 public:
-    // =========================================================================
-    // CONSTRUCTOR AND DESTRUCTOR
-    // =========================================================================
+    // Constructor and destructor
     NonlinearEvolution(const ZPinchParameters& params, 
                       std::shared_ptr<EquilibriumSolver> equilibrium);
     ~NonlinearEvolution() = default;
     
-    // =========================================================================
-    // INITIALIZATION METHODS
-    // =========================================================================
-    
-    // Initialize from equilibrium solution
+    // Initialization methods
     void initializeFromEquilibrium();
-    
-    // Add perturbation for specific instability mode
     void addKinkPerturbation(double amplitude, double kz, int m);
     void addSausagePerturbation(double amplitude, double kz);
     void addRandomPerturbation(double amplitude);
-    
-    // =========================================================================
-    // TIME EVOLUTION METHODS
-    // =========================================================================
-    
-    // Main evolution driver
+
+    // Time evolution methods
     void evolve(double t_max, double output_interval);
+    bool stepEuler(double dt);
+    bool stepRK2(double dt);
     
-    // Single time step using split-step method
-    void stepSplitStep(double dt);
-    
-    // Alternative time integrators (for comparison)
-    void stepRK4(double dt);
-    void stepPredictorCorrector(double dt);
-    
-    // =========================================================================
-    // PHYSICS METHODS - SPLIT-STEP COMPONENTS
-    // =========================================================================
-    
-    // Hyperbolic step (ideal MHD terms)
-    void stepHyperbolic(double dt);
-    
-    // Source terms step (pressure gradient, Lorentz force)
-    void stepSourceTerms(double dt);
-    
-    // Divergence cleaning step (maintain ∇·B = 0)
-    void stepDivergenceCleaning(double dt);
-    
-    // Boundary conditions application
-    void applyBoundaryConditions();
-    
-    // =========================================================================
-    // RIGHT-HAND SIDE COMPUTATIONS
-    // =========================================================================
-    
-    // Compute RHS for MHD equations
-    void computeRHS(const std::vector<std::vector<double>>& state,
-                   std::vector<std::vector<double>>& rhs);
-    
-    // Individual term computations
-    void computeAdvectionTerms(const std::vector<std::vector<double>>& state,
-                              std::vector<std::vector<double>>& advection);
-    void computePressureTerms(const std::vector<std::vector<double>>& state,
-                             std::vector<std::vector<double>>& pressure);
-    void computeLorentzTerms(const std::vector<std::vector<double>>& state,
-                            std::vector<std::vector<double>>& lorentz);
-    
-    // =========================================================================
-    // DIAGNOSTIC METHODS
-    // =========================================================================
-    
-    // Energy calculations
+    // Diagnostic methods
     double computeKineticEnergy() const;
     double computeMagneticEnergy() const;
     double computeInternalEnergy() const;
     double computeTotalEnergy() const;
-    
-    // Instability growth rates
     double computeGrowthRate() const;
-    
-    // Conservation checks
-    double checkMassConservation() const;
-    double checkEnergyConservation() const;
-    double checkDivBCondition() const;
-    
-    // =========================================================================
-    // OUTPUT AND VISUALIZATION
-    // =========================================================================
-    
-    // Save current state to file
+    double computeKinkAmplitude() const;
+    bool checkStateFinite() const;
+
+    // Historical energy methods
+    double computeKineticEnergyAtStep(size_t step) const;
+    double computeMagneticEnergyAtStep(size_t step) const;
+    double computeInternalEnergyAtStep(size_t step) const;
+
+    // Output methods
     void saveState(const std::string& filename) const;
-    
-    // Save time history
     void saveTimeHistory(const std::string& filename) const;
     
-    // Get state for visualization
+    // Getters
     const std::vector<std::vector<double>>& getState() const { return state_curr_; }
     const std::vector<double>& getTimeHistory() const { return time_history_; }
     const std::vector<double>& getEnergyHistory() const { return energy_history_; }
-    
-    // =========================================================================
-    // PARAMETER CONTROL
-    // =========================================================================
-    void setCFLNumber(double cfl) { cfl_number_ = cfl; }
-    void setDivBCleaning(bool enable) { enable_divB_cleaning_ = enable; }
-
-    void addArtificialDissipation(double dt);
+    const std::vector<double>& getGrowthRateHistory() const { return growth_rate_history_; }
+    const std::vector<double>& getKinkAmplitudeHistory() const { return kink_amplitude_history_; }
     
 private:
-    // =========================================================================
-    // INTERNAL METHODS
-    // =========================================================================
-    
-    // Grid initialization
+    // Internal methods
     void initializeGrid();
+    double computeCFLTimeStep() const;
+    void storeDiagnostics();
+    void applyBoundaryConditions();
+    std::vector<std::vector<double>> computeRHS(const std::vector<std::vector<double>>& state);
+    void debugGrowthCalculation() const;  // Added debug method
     
     // State variable indexing
     enum StateVariable {
-        RHO = 0,    // Density
-        VR = 1,     // Radial velocity
-        VZ = 2,     // Axial velocity
-        VTHETA = 3, // Azimuthal velocity
-        P = 4,      // Pressure
-        BR = 5,     // Radial magnetic field
-        BZ = 6,     // Axial magnetic field
-        BTHETA = 7  // Azimuthal magnetic field
+        RHO = 0, VR = 1, VZ = 2, VTHETA = 3, 
+        P = 4, BR = 5, BZ = 6, BTHETA = 7
     };
     
-    // Numerical parameters
-    double cfl_number_ = 0.5;
-    bool enable_divB_cleaning_ = true;
-    double divB_cleaning_coeff_ = 1.0;
-    
-    // Helper functions
-    double computeSoundSpeed(double pressure, double density) const;
-    double computeAlfvenSpeed(double B, double density) const;
-    double computeCFLTimeStep() const;
-    
-    // Numerical derivatives
-    double derivativeR(const std::vector<double>& f, int i, int j) const;
-    double derivativeZ(const std::vector<double>& f, int i, int j) const;
-    
-    // Interpolation functions
-    double interpolateToFaceR(const std::vector<double>& f, int i, int j) const;
-    double interpolateToFaceZ(const std::vector<double>& f, int i, int j) const;
+    // Physics constants
+    const double mu0_ = 4.0e-7 * M_PI;
+    const double gamma_ = 5.0 / 3.0;
 };
 
 #endif

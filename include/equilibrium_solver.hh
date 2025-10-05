@@ -49,9 +49,6 @@ public:
     
     // Parabolic pressure profile
     void computeParabolicEquilibrium();
-
-    // Azimuthal field profile calculation - AGREGAR ESTA LÍNEA
-    double bthetaProfile(double r) const;
     
     // =========================================================================
     // PROFILE GETTERS
@@ -108,10 +105,6 @@ private:
     
     // Boundary conditions
     void applyBoundaryConditions();
-    
-    // Numerical differentiation
-    double derivative(const std::vector<double>& f, int i) const;
-    double secondDerivative(const std::vector<double>& f, int i) const;
 };
 
 #endif

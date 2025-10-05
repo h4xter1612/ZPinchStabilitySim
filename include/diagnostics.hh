@@ -63,16 +63,6 @@ public:
     // Generate stability diagrams
     void generateStabilityDiagram(const std::string& filename) const;
     
-    // Calculate stability boundaries
-    struct StabilityBoundaries {
-        double kink_limit_current;
-        double sausage_limit_beta;
-        double kruskal_shafranov_length;
-        double troyon_limit;
-    };
-    
-    StabilityBoundaries computeStabilityBoundaries() const;
-    
     // =========================================================================
     // NONLINEAR EVOLUTION DIAGNOSTICS
     // =========================================================================
@@ -108,9 +98,6 @@ public:
     // MODE ANALYSIS
     // =========================================================================
     
-    // Fourier analysis of perturbations
-    std::vector<double> computeFourierSpectrum(int variable_index) const;
-    
     // Dominant mode identification
     struct DominantMode {
         int m;          // Azimuthal mode number
@@ -139,11 +126,10 @@ public:
     // VISUALIZATION DATA EXPORT
     // =========================================================================
     
-    // Export data for Python visualization
+    // Export data for visualization
     void exportEquilibriumData(const std::string& filename) const;
     void exportStabilityData(const std::string& filename) const;
     void exportEvolutionData(const std::string& filename) const;
-    void exportModeStructureData(const std::string& filename, int m, double kz) const;
     
     // =========================================================================
     // REPORT GENERATION
@@ -163,10 +149,6 @@ public:
     bool checkSimulationHealth() const;
     
 private:
-    // =========================================================================
-    // INTERNAL METHODS
-    // =========================================================================
-    
     // Helper functions for specific calculations
     double computeMagneticShear() const;
     double computeMercierCriterion() const;

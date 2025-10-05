@@ -45,27 +45,45 @@ double LinearStabilityAnalyzer::bthetaProfile(double r) const {
 void LinearStabilityAnalyzer::computeEquilibrium() {
     p_eq_.resize(params_.Nr);
     Btheta_eq_.resize(params_.Nr);
-    Bz_eq_.resize(params_.Nr, params_.B0); // Constant axial field
+    Bz_eq_.resize(params_.Nr, params_.B0);
     jz_eq_.resize(params_.Nr);
+    
+    // Use equilibrium solver data if available
+    if (equilibrium_) {
+        const auto& r_grid = equilibrium_->getRadialGrid();
+        const auto& p_profile = equilibrium_->getPressureProfile();
+        const auto& Btheta_profile = equilibrium_->getBthetaProfile();
+        
+        for (int i = 0; i < params_.Nr; ++i) {
+            p_eq_[i] = p_profile[i];
+            Btheta_eq_[i] = Btheta_profile[i];
+        }
+    } else {
+        // Fallback to analytical profiles
+        for (int i = 0; i < params_.Nr; ++i) {
+            double r = r_grid_[i];
+            p_eq_[i] = bennettPressureProfile(r);
+            Btheta_eq_[i] = bthetaProfile(r);
+        }
+    }
+    
+    // Calculate current density consistently
+    computeCurrentFromBtheta();
+}
+
+void LinearStabilityAnalyzer::computeCurrentFromBtheta() {
+    const double mu0 = 4.0e-7 * M_PI;
     
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
-        p_eq_[i] = bennettPressureProfile(r);
-        Btheta_eq_[i] = bthetaProfile(r);
         
-        // Current density: j_z = (1/μ₀) (1/r) d/dr (r B_θ)
         if (i == 0) {
-            // At r=0, use Taylor expansion
-            jz_eq_[i] = (4e-7 * M_PI * params_.I0) / (M_PI * params_.a * params_.a);
+            // At axis
+            jz_eq_[0] = (2.0 * Btheta_eq_[1] / (r_grid_[1])) / mu0;
         } else {
-            double r_plus = r_grid_[std::min(i+1, params_.Nr-1)];
-            double r_minus = r_grid_[std::max(i-1, 0)];
-            double dr = r_plus - r_minus;
-            
-            double d_rBtheta_dr = (r_plus * bthetaProfile(r_plus) - 
-                                 r_minus * bthetaProfile(r_minus)) / dr;
-            
-            jz_eq_[i] = d_rBtheta_dr / (r * 4e-7 * M_PI);
+            double dr = r_grid_[i] - r_grid_[i-1];
+            double d_rBtheta_dr = (r * Btheta_eq_[i] - r_grid_[i-1] * Btheta_eq_[i-1]) / dr;
+            jz_eq_[i] = d_rBtheta_dr / (mu0 * r);
         }
     }
 }
@@ -74,35 +92,35 @@ void LinearStabilityAnalyzer::computeEquilibrium() {
 // KINK MODE ANALYSIS (m=1)
 // =============================================================================
 LinearStabilityAnalyzer::KinkModeResult 
-LinearStabilityAnalyzer::analyzeKinkMode(double k) {
+LinearStabilityAnalyzer::analyzeKinkMode(double k) const {
     KinkModeResult result;
     result.k = k;
     
     double vA = params_.alfven_speed();
     
-    // OBTENER safety factor DEL EQUILIBRIUM SOLVER
+    // Get safety factor from equilibrium solver
     double q_edge = 0.0;
-    if (equilibrium_) {  // Verificar que equilibrium_ no sea nullptr
+    if (equilibrium_) {
         const auto& q_profile = equilibrium_->getSafetyFactorProfile();
         if (!q_profile.empty()) {
             q_edge = std::abs(q_profile.back());
         }
     }
     
-    // Fórmula más realista para kink mode
+    // More realistic formula for kink mode
     double omega_r = k * vA;
     double omega_i = 0.0;
     
-    // Criterio de Kruskal-Shafranov mejorado
+    // Improved Kruskal-Shafranov criterion
     if (q_edge < 1.0 && k > 0.1) {
-        omega_i = 0.01 * vA * k * (1.0 - q_edge); // Crecimiento modesto
+        omega_i = 0.01 * vA * k * (1.0 - q_edge); // Modest growth
     }
     
     result.omega = std::complex<double>(omega_r, omega_i);
     result.growth_rate = omega_i;
     result.frequency = omega_r;
     
-    // Eigenfunction más realista
+    // More realistic eigenfunction
     result.eigenfunction.resize(params_.Nr);
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
@@ -116,7 +134,7 @@ LinearStabilityAnalyzer::analyzeKinkMode(double k) {
 // SAUSAGE MODE ANALYSIS (m=0)
 // =============================================================================
 LinearStabilityAnalyzer::SausageModeResult 
-LinearStabilityAnalyzer::analyzeSausageMode(double k) {
+LinearStabilityAnalyzer::analyzeSausageMode(double k) const {
     SausageModeResult result;
     result.k = k;
     
@@ -205,4 +223,32 @@ double LinearStabilityAnalyzer::sausageStabilityCriterion() const {
         }
     }
     return max_pressure_gradient;
+}
+// =============================================================================
+// EIGENFUNCTION EXPORT - VERSIÓN MEJORADA
+// =============================================================================
+void LinearStabilityAnalyzer::exportEigenfunctions(const std::string& filename) const {
+    std::ofstream file(filename);
+    file << "r,kink_eigenfunction,sausage_eigenfunction\n";
+    
+    // Analizar modos para obtener eigenfunciones reales
+    double typical_k = 2.0 * M_PI / params_.L; // Número de onda típico
+    
+    // Obtener eigenfunciones de los análisis
+    auto kink_result = analyzeKinkMode(typical_k);
+    auto sausage_result = analyzeSausageMode(typical_k);
+    
+    // Exportar las eigenfunciones calculadas
+    for (int i = 0; i < params_.Nr; ++i) {
+        double r = r_grid_[i];
+        
+        // Usar las eigenfunciones calculadas por analyzeKinkMode y analyzeSausageMode
+        double kink_func = kink_result.eigenfunction[i];
+        double sausage_func = sausage_result.eigenfunction[i];
+        
+        file << r << "," << kink_func << "," << sausage_func << "\n";
+    }
+    
+    file.close();
+    std::cout << "Eigenfunctions exported to: " << filename << std::endl;
 }

@@ -151,6 +151,21 @@ add_custom_command(TARGET zpinch_sim POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
             $<TARGET_FILE_DIR:zpinch_sim>/data/snap
 )
+
+
+# Buscar todos los .py en la carpeta raíz del proyecto
+file(GLOB PY_SCRIPTS "${CMAKE_SOURCE_DIR}/pyscripts/*.py")
+
+# Copiar cada uno después del build
+foreach(script ${PY_SCRIPTS})
+    add_custom_command(TARGET zpinch_sim POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${script}"
+        $<TARGET_FILE_DIR:zpinch_sim>)
+endforeach()
+
+
+
 # ==============================================================================
 # CUSTOM TARGETS
 # ==============================================================================

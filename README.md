@@ -1,211 +1,200 @@
-Z-Pinch MHD Stability Simulator
+# Z-Pinch Stability Simulator: MHD Plasma Analysis
 
-[C++17] [Python] [MHD Plasma] [CMake]
+![C++17](https://img.shields.io/badge/Language-C++17-blue)  ![Python](https://img.shields.io/badge/Visualization-Python-green)
+![Plasma Physics](https://img.shields.io/badge/Physics-Plasma_Physics-red)
 
-------------------------------------------------------------------------
+---
 
-Description
+## Description
 
-This project implements a comprehensive Z-Pinch stability analysis tool
-for studying magnetohydrodynamic (MHD) instabilities in cylindrical
-plasma configurations.
-The code solves the full nonlinear MHD equations with realistic boundary
-conditions and provides both linear stability analysis and nonlinear
-evolution capabilities.
+This project implements a **Z-Pinch plasma stability simulator** for **MHD analysis**. It supports **equilibrium calculations, linear stability analysis, and nonlinear evolution** of plasma instabilities such as **kink and sausage modes**.
 
-Main features
+Key features:
 
--   Equilibrium solver for force-balanced Z-pinch configurations
--   Linear stability analysis for kink (m=1) and sausage (m=0) modes
--   Nonlinear MHD evolution with artificial viscosity for numerical
-    stability
--   Multiple simulation modes: equilibrium, linear, nonlinear, and full
-    analysis pipeline
--   Advanced diagnostics including growth rates, energy evolution, and
-    instability detection
--   Comprehensive Python visualization for 2D animations and radial
-    cross-section analysis
--   Automatic stop conditions for detecting explosive instability growth
--   Progress tracking with real-time growth factor display
+* Equilibrium force-balance solver
+* Linear stability analysis for kink and sausage modes
+* Nonlinear time evolution of plasma instabilities
+* Full analysis pipeline combining equilibrium, linear, and nonlinear simulations
+* Python visualization scripts for field evolution and mode structures
+* Radial analysis for detailed plasma diagnostics
 
-------------------------------------------------------------------------
+---
 
-Physical Model
+## Project Structure
 
-The simulator solves the ideal MHD equations in cylindrical coordinates:
+```
+ZPinchStabilitySim/
+├── include/                 # Header files
+│   ├── diagnostics.hh       # Diagnostics and data analysis
+│   ├── equilibrium_solver.hh# Equilibrium solver
+│   ├── linear_stability.hh  # Linear stability analyzer
+│   ├── nonlinear_evolution.hh # Nonlinear evolution solver
+│   └── zpinch_params.hh     # Plasma and simulation parameters
+├── src/                     # Source files
+│   ├── main.cpp             # Main program with mode selection
+│   ├── diagnostics.cpp      # Diagnostics implementation
+│   ├── equilibrium_solver.cpp # Equilibrium solver implementation
+│   ├── linear_stability.cpp # Linear stability implementation
+│   └── nonlinear_evolution.cpp # Nonlinear evolution implementation
+├── pyscripts/               # Python visualization scripts
+│   ├── animation_2d.py      # 2D plasma evolution animation
+│   ├── radial_animation.py  # Radial profile evolution animation
+│   ├── equilibrium_2d.py    # Equilibrium visualization
+│   ├── instability_growth.py # Instability growth analysis
+│   ├── mode_structure.py    # Mode structure plotting
+│   └── stability_diagram.py # Linear stability diagrams
+├── data/                    # Output CSV and snapshot files
+├── CMakeLists.txt           # Build configuration
+├── LICENSE                  # MIT License
+└── README.md                # Project documentation
+```
 
-Continuity Equation:
-$$\frac{\partial \rho}{\partial t} + \nabla \cdot (\rho \vec{v}) = 0$$
+---
 
-Momentum Equation:
-$$\rho \left( \frac{\partial \vec{v}}{\partial t} + \vec{v} \cdot \nabla \vec{v} \right) = -\nabla p + \vec{J} \times \vec{B}$$
+## Simulation Modes
 
-Energy Equation:
-$$\frac{\partial p}{\partial t} + \vec{v} \cdot \nabla p + \gamma p \nabla \cdot \vec{v} = 0$$
+* `equilibrium`  → Run equilibrium analysis only
+* `linear`       → Linear stability analysis (kink/sausage modes)
+* `nonlinear`    → Nonlinear evolution
+* `full`         → Full pipeline (equilibrium + linear + nonlinear)
+* `help`         → Show usage instructions
 
-Magnetic Induction:
-$$\frac{\partial \vec{B}}{\partial t} = \nabla \times (\vec{v} \times \vec{B})$$
+**Mode Options:**
 
-Where:
-- ρ: plasma density
-- v⃗: velocity field
-- p: plasma pressure
-- B⃗: magnetic field
-- J⃗: current density (∇ × B⃗/μ₀)
-- γ: adiabatic index (5/3)
+* `--no-kink` → Disable kink mode
+* `--sausage` → Enable sausage mode
 
-------------------------------------------------------------------------
+**Default behavior:**
 
-Project Structure
+* Kink: ENABLED
+* Sausage: DISABLED
 
-    ZPinchStabilitySim/
-    ├── include/
-    │   ├── zpinch_params.hh
-    │   ├── equilibrium_solver.hh
-    │   ├── linear_stability.hh
-    │   ├── nonlinear_evolution.hh
-    │   └── diagnostics.hh
-    ├── src/
-    │   ├── main.cpp
-    │   ├── equilibrium_solver.cpp
-    │   ├── linear_stability.cpp
-    │   ├── nonlinear_evolution.cpp
-    │   └── diagnostics.cpp
-    ├── pyscripts/
-    │   ├── animation_2d.py
-    │   ├── radial_analysis.py
-    │   ├── instability_growth.py
-    │   ├── equilibrium_2d.py
-    │   ├── mode_structure.py
-    │   └── stability_diagram.py
-    ├── CMakeLists.txt
-    └── LICENSE
+---
 
-------------------------------------------------------------------------
+## Build Instructions
 
-Features
+### Prerequisites
 
-Simulation Capabilities
+* C++17 compatible compiler
+* CMake 3.12+
+* Python 3.6+ with **NumPy, Matplotlib**
 
--   Equilibrium calculation with self-consistent force balance
--   Linear stability analysis for kink and sausage modes
--   Nonlinear MHD evolution with Euler time integration
--   Multiple instability modes: kink (m=1), sausage (m=0), and mixed
-    modes
--   Automatic growth detection with configurable thresholds
--   CFL-based time stepping for numerical stability
--   Artificial viscosity for damping numerical oscillations
+### Build
 
-Analysis Tools
+```bash
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+```
 
--   2D field visualization (v_(r), B_(r), B_(θ), pressure)
--   Radial cross-section analysis at fixed axial positions
--   Instability growth tracking with exponential fit analysis
--   Energy evolution (kinetic, magnetic, internal, total)
--   Mode structure visualization from linear analysis
--   Stability diagrams for parameter space exploration
+Executable: `zpinch_sim` (Linux/macOS) or `zpinch_sim.exe` (Windows)
 
-------------------------------------------------------------------------
+---
 
-Build Instructions
+## Usage Examples
 
-Prerequisites
+### Equilibrium Analysis
 
--   C++17 compiler (GCC 7+, Clang 5+, MSVC 2019+)
--   CMake 3.12+
--   Python 3.6+ with NumPy, Matplotlib, Pandas
+```bash
+./zpinch_sim equilibrium
+```
 
-Building the Project
+### Linear Stability Analysis
 
-    mkdir build && cd build
-    cmake ..
-    cmake --build . --config Release
+```bash
+./zpinch_sim linear --sausage
+```
 
-------------------------------------------------------------------------
+### Nonlinear Evolution
 
-Usage
+```bash
+./zpinch_sim nonlinear --no-kink --sausage
+```
 
-Available Modes
+### Full Analysis Pipeline
 
-    ./zpinch_sim equilibrium
-    ./zpinch_sim linear
-    ./zpinch_sim nonlinear
-    ./zpinch_sim full
+```bash
+./zpinch_sim full --sausage
+```
 
-Command Line Options
+---
 
--   --no-kink → Disable kink mode
--   --sausage → Enable sausage mode
--   --help → Show help message
+## Output Files
 
-------------------------------------------------------------------------
+* `data/equilibrium_profiles.csv`
+* `data/stability_diagram.csv` (linear analysis)
+* `data/time_history.csv`
+* `data/mode_structures.csv` (linear analysis)
+* Snapshots: `data/snap/output_state_*.csv`
+* Reports: `data/full_analysis_report.txt`
 
-Simulation Output
+### Generated Visualization Files
 
-Data Files (in data/)
+* `zpinch_evolution.gif` (2D animation)
+* `radial_evolution.gif` (Radial profiles animation)
+* `radial_profile_comparison.png`
+* `radial_growth_analysis.png`
+* `pressure_magnetic_profiles.png`
+* `time_evolution_plots.png`
+* `zpinch_static_comparison.png`
 
--   equilibrium_profiles.csv
--   stability_diagram.csv
--   time_history.csv
--   mode_structures.csv
--   equilibrium_diagnostics.csv
--   full_analysis_report.txt
+---
 
-Snapshots (in data/snap/)
+## Python Visualization
 
--   output_state_*.csv — 2D field snapshots for visualization
+* `animation_2d.py` → 2D plasma animation
+* `radial_animation.py` → Radial profile evolution
+* `equilibrium_2d.py` → Equilibrium plots
+* `instability_growth.py` → Growth rates
+* `mode_structure.py` → Linear eigenmodes
+* `stability_diagram.py` → Stability diagram
 
-------------------------------------------------------------------------
+**Quick Start:**
 
-Visualization
+```bash
+1. ./zpinch_sim nonlinear
+2. python radial_analysis.py
+3. View generated plots and animations
+```
 
-    python pyscripts/animation_2d.py
-    python pyscripts/radial_analysis.py
-    python pyscripts/instability_growth.py
-    python pyscripts/equilibrium_2d.py
-    python pyscripts/mode_structure.py
-    python pyscripts/stability_diagram.py
+---
 
-------------------------------------------------------------------------
+## Customization
 
-Example Results
+Modify parameters in `zpinch_params.hh` or in `main.cpp`:
 
--   zpinch_evolution.gif — 2D plasma evolution animation
--   radial_evolution.gif — Radial profile evolution
--   time_evolution_plots.png — Diagnostics
--   zpinch_static_comparison.png — 2D snapshots
+```cpp
+params.Nr = 64; // radial points
+params.Nz = 32; // axial points
+params.dt = 1e-9; // time step
+params.t_max = 1e-5; // total simulation time
+params.n0 = 1e18; // plasma density
+params.T0 = 20.0; // temperature
+params.B0 = 0.05; // axial field
+params.I0 = 3e5; // current
+```
 
-------------------------------------------------------------------------
+---
 
-License
+## Physics Validation
+
+* Equilibrium force-balance verification
+* Linear growth rates vs theory
+* Nonlinear mode evolution
+* Radial and axial profile checks
+* Safety factor calculations
+
+---
+
+## License
 
 MIT License © 2025 Juan Pablo Solís Ruiz
 
-------------------------------------------------------------------------
+---
 
-References
+## Contact
 
--   Freidberg, J. P. Ideal Magnetohydrodynamics (1987)
--   Bateman, G. MHD Instabilities (1978)
--   Shafranov, V. D. Reviews of Plasma Physics (1966)
--   Ryu & Jones. Numerical Magnetohydrodynamics (1995)
-
-------------------------------------------------------------------------
-
-Contact
-
-Author: Juan Pablo Solís Ruiz
-Email: jp.sruiz18.tec@gmail.com
-GitHub: h4xter1612
-
-------------------------------------------------------------------------
-
-Future Work
-
--   Higher-order time integration (RK4, Adams-Bashforth)
--   Adaptive mesh refinement
--   Hall MHD and resistive effects
--   OpenMP/MPI parallelization
--   GPU acceleration (CUDA)
--   Experimental validation
+* Email: [jp.sruiz18.tec@gmail.com](mailto:jp.sruiz18.tec@gmail.com)
+* GitHub: [h4xter1612](https://github.com/h4xter1612)
 

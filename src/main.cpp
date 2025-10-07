@@ -82,14 +82,14 @@ void applyPerturbations(std::shared_ptr<NonlinearEvolution> evolution,
     std::cout << "Adding perturbations:" << std::endl;
     
     if (enable_kink) {
-        double kink_amplitude = 0.1;  // Small amplitude for stability 0.001
+        double kink_amplitude = 0.000001;  // Small amplitude for stability 0.001
         evolution->addKinkPerturbation(kink_amplitude, kink_k, 1);
         std::cout << "  - Kink perturbation: amplitude=" << kink_amplitude 
                   << ", k=" << kink_k << std::endl;
     }
     
     if (enable_sausage) {
-        double sausage_amplitude = 0.05; // Very small amplitude 0.0005
+        double sausage_amplitude = 0.0000005; // Very small amplitude 0.0005
         evolution->addSausagePerturbation(sausage_amplitude, kz_realistic);
         std::cout << "  - Sausage perturbation: amplitude=" << sausage_amplitude << std::endl;
     }

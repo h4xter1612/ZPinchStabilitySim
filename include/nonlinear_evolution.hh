@@ -43,6 +43,9 @@ private:
     bool enable_divB_cleaning_ = true;
     double divB_cleaning_coeff_ = 0.1;
     double artificial_viscosity_ = 1e-6;
+
+    // Stop conditions control
+    bool stop_conditions_enabled_;
     
 public:
     // Constructor and destructor
@@ -86,6 +89,11 @@ public:
     const std::vector<double>& getEnergyHistory() const { return energy_history_; }
     const std::vector<double>& getGrowthRateHistory() const { return growth_rate_history_; }
     const std::vector<double>& getKinkAmplitudeHistory() const { return kink_amplitude_history_; }
+
+    // ✅ NEW: Stop conditions control methods
+    void disableStopConditions() { stop_conditions_enabled_ = false; }
+    void enableStopConditions() { stop_conditions_enabled_ = true; }
+    bool areStopConditionsEnabled() const { return stop_conditions_enabled_; }
     
 private:
     // Internal methods
@@ -94,7 +102,12 @@ private:
     void storeDiagnostics();
     void applyBoundaryConditions();
     std::vector<std::vector<double>> computeRHS(const std::vector<std::vector<double>>& state);
-    void debugGrowthCalculation() const;  // Added debug method
+
+    // Debug methods
+    void debugGrowthCalculation() const;  
+    void debugNumericalNoise() const;
+    void checkNumericalStability() const;
+    void debugSausageCalculation() const;
     
     // State variable indexing
     enum StateVariable {

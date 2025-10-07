@@ -34,8 +34,9 @@ def plot_mode_structures():
         print("Mode structure plots saved to 'mode_structures.png'")
         
     except FileNotFoundError:
-        print("Mode structures file not found. Run linear stability analysis first.")
-        print("Usage: ./zpinch_sim linear --sausage")
+        print("Mode structures file not found. Run instabilities first.")
+        print("Usage: ./zpinch_sim MODE --sausage")
+
 
 def analyze_mode_properties():
     """Analyze properties of the instability modes"""

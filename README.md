@@ -20,6 +20,38 @@ Key features:
 
 ---
 
+## Physical Model
+
+The simulator solves the ideal MHD equations in cylindrical coordinates:
+
+Continuity Equation:
+$$\frac{\partial \rho}{\partial t} + \nabla \cdot (\rho \vec{v}) = 0$$
+
+Momentum Equation:
+$$\rho \left( \frac{\partial \vec{v}}{\partial t} + \vec{v} \cdot \nabla \vec{v} \right) = -\nabla p + \vec{J} \times \vec{B}$$
+
+Energy Equation:
+$$\frac{\partial p}{\partial t} + \vec{v} \cdot \nabla p + \gamma p \nabla \cdot \vec{v} = 0$$
+
+Magnetic Induction:
+$$\frac{\partial \vec{B}}{\partial t} = \nabla \times (\vec{v} \times \vec{B})$$
+
+Where:
+
+- $\rho$: plasma density
+
+- $\vec{v}$: velocity field
+
+- $p$: plasma pressure
+
+- $\vec{B}$: magnetic field
+
+- $\vec{J}$: current density ($\nabla \times \vec{B} / \mu_0$)
+
+- $\gamma$: adiabatic index (5/3)
+
+---
+
 ## Project Structure
 
 ```

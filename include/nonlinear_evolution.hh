@@ -36,6 +36,7 @@ private:
     std::vector<double> energy_history_;
     std::vector<double> growth_rate_history_;
     std::vector<double> kink_amplitude_history_;
+    std::vector<double> sausage_amplitude_history_;
 
     // Numerical parameters
     double cfl_number_ = 0.3;
@@ -62,6 +63,7 @@ public:
     
     // Diagnostic methods
     double computeKineticEnergy() const;
+    double computeSausageAmplitude() const;
     double computeMagneticEnergy() const;
     double computeInternalEnergy() const;
     double computeTotalEnergy() const;

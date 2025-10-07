@@ -161,7 +161,15 @@ void runNonlinearEvolution(bool enable_kink, bool enable_sausage) {
     params.Nz = 32;
     params.dt = 1e-9;
     params.t_max = 1e-5;
-    
+
+    if (enable_sausage && !enable_kink) {
+        // Parameters that favor sausage instability but are more stable
+        params.n0 = 5e18;        // Moderate density (reduced from 1e19)
+        params.T0 = 50.0;        // Moderate temperature (reduced from 100.0)
+        params.B0 = 0.03;        // Moderate axial field (increased from 0.02)
+        params.I0 = 5e4;         // Lower current (reduces kink dominance)
+    }
+
     auto equilibrium = std::make_shared<EquilibriumSolver>(params);
     equilibrium->solveForceBalance();
     
@@ -171,23 +179,24 @@ void runNonlinearEvolution(bool enable_kink, bool enable_sausage) {
     // Realistic perturbations
     double vA = params.alfven_speed();
     std::cout << "Alfven speed: " << vA << " m/s" << std::endl;
+    std::cout << "Plasma beta: " << params.beta() << std::endl;
     
     double kz_realistic = 2.0 * M_PI / params.L;
     
     // Add perturbations based on enabled modes
     if (enable_kink) {
-        evolution->addKinkPerturbation(0.01, kz_realistic, 1);
+        evolution->addKinkPerturbation(0.001, kz_realistic, 1);
         std::cout << "Added kink perturbation" << std::endl;
     }
     
     if (enable_sausage) {
-        evolution->addRandomPerturbation(0.001);
+        evolution->addSausagePerturbation(0.0005, kz_realistic);
         std::cout << "Added sausage perturbation" << std::endl;
     }
     
     // Add random perturbation if no specific modes enabled
     if (!enable_kink && !enable_sausage) {
-        evolution->addRandomPerturbation(0.001);
+        evolution->addRandomPerturbation(0.0001);
         std::cout << "Added random perturbation (no specific modes enabled)" << std::endl;
     }
     
@@ -213,7 +222,14 @@ void runFullAnalysis(bool enable_kink, bool enable_sausage) {
     params.Nz = 32; 
     params.dt = 1e-9;
     params.t_max = 5e-5;
-    
+
+    if (enable_sausage && !enable_kink) {
+        // Parameters that favor sausage instability but are more stable
+        params.n0 = 5e18;        // Moderate density (reduced from 1e19)
+        params.T0 = 50.0;        // Moderate temperature (reduced from 100.0)
+        params.B0 = 0.03;        // Moderate axial field (increased from 0.02)
+        params.I0 = 5e4;         // Lower current (reduces kink dominance)
+    }    
     // Check stability criteria
     checkStabilityCriteria(params);
     

@@ -88,7 +88,9 @@ void NonlinearEvolution::initializeFromEquilibrium() {
 // PERTURBATION METHODS
 // =============================================================================
 void NonlinearEvolution::addKinkPerturbation(double amplitude, double kz, int m) {
-    double robust_amplitude = std::max(amplitude, 0.1);
+    double vA = params_.alfven_speed();
+    // Scale amplitude with Alfven speed for physical relevance
+    double robust_amplitude = std::max(amplitude, 0.01) * vA * 0.1;
     
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
@@ -99,37 +101,59 @@ void NonlinearEvolution::addKinkPerturbation(double amplitude, double kz, int m)
             if (r < params_.a) {
                 double r_norm = r / params_.a;
                 
-                // Velocity perturbation
-                state_curr_[VR][idx] += robust_amplitude * r_norm * std::cos(kz * z);
-                state_curr_[VTHETA][idx] += robust_amplitude * r_norm * std::sin(kz * z);
+                // Enhanced velocity perturbation with proper m=1 structure
+                state_curr_[VR][idx] += robust_amplitude * r_norm * std::cos(m * kz * z);
+                state_curr_[VTHETA][idx] += robust_amplitude * r_norm * std::sin(m * kz * z);
                 
-                // Magnetic field perturbation
-                state_curr_[BR][idx] += 0.5 * robust_amplitude * params_.B0 * r_norm * std::sin(kz * z);
-                state_curr_[BTHETA][idx] += 0.5 * robust_amplitude * params_.B0 * r_norm * std::cos(kz * z);
+                // Enhanced magnetic field perturbation for m=1 kink mode
+                state_curr_[BR][idx] += 0.5 * robust_amplitude * params_.B0 * 
+                                       r_norm * std::sin(m * kz * z);
+                state_curr_[BTHETA][idx] += 0.5 * robust_amplitude * params_.B0 * 
+                                          r_norm * std::cos(m * kz * z);
+                
+                // Add axial velocity perturbation for helical structure
+                state_curr_[VZ][idx] += 0.3 * robust_amplitude * r_norm * 
+                                       std::cos(m * kz * z);
             }
         }
     }
 }
 
 void NonlinearEvolution::addSausagePerturbation(double amplitude, double kz) {
-    // Sausage mode (m=0) perturbation - radial compression/expansion
+    // Sausage mode (m=0) - radial compression/expansion
+    double vA = params_.alfven_speed();
+    // Scale amplitude with Alfven speed for physical relevance
+    double robust_amplitude = std::max(amplitude, 0.01) * vA * 0.1;
+
     for (int i = 0; i < params_.Nr; ++i) {
         double r = r_grid_[i];
         for (int j = 0; j < params_.Nz; ++j) {
             int idx = i * params_.Nz + j;
             double z = z_grid_[j];
-            
+
             if (r < params_.a) {
                 double r_norm = r / params_.a;
-                
-                // Radial velocity perturbation (compressive)
-                state_curr_[VR][idx] += amplitude * r_norm * std::sin(kz * z);
-                
-                // Pressure perturbation (in phase with compression)
-                state_curr_[P][idx] += 0.3 * amplitude * state_curr_[P][idx] * r_norm * std::cos(kz * z);
-                
-                // Magnetic field perturbation for sausage mode
-                state_curr_[BTHETA][idx] += 0.2 * amplitude * state_curr_[BTHETA][idx] * r_norm * std::sin(kz * z);
+
+                // Improved radial velocity perturbation (compressive)
+                // Use a profile that vanishes at r=a and has maximum at r=0
+                state_curr_[VR][idx] += robust_amplitude * std::sin(kz * z) * 
+                                       r_norm * (1.0 - r_norm);
+
+                // Improved pressure perturbation (in phase with compression)
+                double pressure_perturbation = 0.5 * robust_amplitude * state_curr_[P][idx] * 
+                                             std::cos(kz * z) * r_norm;
+                state_curr_[P][idx] += pressure_perturbation;
+
+                // Improved magnetic field perturbations
+                // For sausage mode, Bz and Br are also perturbed
+                state_curr_[BZ][idx] += 0.3 * robust_amplitude * state_curr_[BZ][idx] * 
+                                       std::sin(kz * z) * r_norm;
+                state_curr_[BR][idx] += 0.2 * robust_amplitude * params_.B0 * 
+                                       std::cos(kz * z) * r_norm;
+
+                // Density perturbation for compressive mode
+                state_curr_[RHO][idx] += 0.4 * robust_amplitude * state_curr_[RHO][idx] * 
+                                        std::cos(kz * z) * r_norm;
             }
         }
     }
@@ -184,6 +208,7 @@ void NonlinearEvolution::evolve(double t_max, double output_interval) {
     std::cout << "Saved initial state: " << initial_filename << std::endl;
 
     double initial_amp = computeKinkAmplitude();
+    double initial_sausage_amp = computeSausageAmplitude();
 
     const int bar_width = 50;  // visual width of the progress bar
     auto start_time = std::chrono::steady_clock::now();  // ⏱️ start timing
@@ -214,11 +239,13 @@ void NonlinearEvolution::evolve(double t_max, double output_interval) {
             saveState(filename);
 
             double kink_amp = computeKinkAmplitude();
+            double sausage_amp = computeSausageAmplitude();
             double growth_rate = computeGrowthRate();
 
             // Show progress
             // std::cout << "t = " << time_ << " s, Kink amp = " << kink_amp 
             //           << " (" << (kink_amp/initial_amp) << "x), Growth rate = " 
+            //           << "Sausage: " << sausage_amp << " (" << (sausage_amp/initial_sausage_amp) << "x), "
             //           << growth_rate << " s^-1" << std::endl;
             // std::cout << "Saved snapshot: " << filename << std::endl;
 
@@ -247,11 +274,19 @@ void NonlinearEvolution::evolve(double t_max, double output_interval) {
                     std::cout << " ";
             }
 
+            // Calculate individual growth factors with protection against division by zero
+            double kink_growth = (initial_amp > 1e-12) ? (kink_amp / initial_amp) : 1.0;
+            double sausage_growth = (initial_sausage_amp > 1e-12) ? (sausage_amp / initial_sausage_amp) : 1.0;
+
+            // Use the maximum growth factor for the main display (most physically meaningful)
+            double display_growth = std::max(kink_growth, sausage_growth);
+
             std::cout << "] "
                       << std::fixed << std::setprecision(1) << (progress * 100.0) << "% "
                       << "| t = " << std::scientific << std::setprecision(2) << time_ << " s "
-                      << "| x" << std::fixed << std::setprecision(1)
-                      << (kink_amp / initial_amp)
+                      << "| x" << std::fixed << std::setprecision(1) << display_growth
+                      << " | K:" << std::fixed << std::setprecision(1) << kink_growth
+                      << " S:" << std::fixed << std::setprecision(1) << sausage_growth
                       << " | Elapsed: " << elapsed_min << "m" << std::setw(2)
                       << std::setfill('0') << elapsed_sec << "s"
                       << " | ETA: " << eta_min << "m" << std::setw(2)
@@ -261,7 +296,12 @@ void NonlinearEvolution::evolve(double t_max, double output_interval) {
             output_count++;
 
             if (kink_amp > 10000 * initial_amp) {
-                std::cout << "\nINSTABILITY GROWN 10,000x! Stopping early." << std::endl;
+                std::cout << "\nKink INSTABILITY GROWN 10,000x! Stopping early." << std::endl;
+                break;
+            }
+
+            if (sausage_amp > 500 * initial_amp) {
+                std::cout << "\nSausage INSTABILITY GROWN 500x! Stopping early." << std::endl;
                 break;
             }
         }
@@ -460,6 +500,38 @@ double NonlinearEvolution::computeKinkAmplitude() const {
     }
     
     return max_amplitude;
+}
+
+double NonlinearEvolution::computeSausageAmplitude() const {
+    double total_compression = 0.0;
+    int count = 0;
+
+    for (int i = 1; i < params_.Nr - 1; ++i) {
+        for (int j = 0; j < params_.Nz; ++j) {
+            int idx = i * params_.Nz + j;
+            double r = r_grid_[i];
+            if (r < 1e-12) continue;
+
+            // Calculate divergence of velocity (compression)
+            double dr = r_grid_[i+1] - r_grid_[i-1];
+            double dvr_dr = (state_curr_[VR][(i+1)*params_.Nz + j] - 
+                           state_curr_[VR][(i-1)*params_.Nz + j]) / dr;
+            double vr_over_r = state_curr_[VR][idx] / r;
+
+            // Axial derivative of Vz (periodic boundaries)
+            int jp = (j + 1) % params_.Nz;
+            int jm = (j - 1 + params_.Nz) % params_.Nz;
+            double dz = params_.L / params_.Nz;
+            double dvz_dz = (state_curr_[VZ][i*params_.Nz + jp] - 
+                           state_curr_[VZ][i*params_.Nz + jm]) / (2.0 * dz);
+
+            double div_v = dvr_dr + vr_over_r + dvz_dz;
+            total_compression += std::abs(div_v);
+            count++;
+        }
+    }
+
+    return (count > 0) ? total_compression / count : 0.0;
 }
 
 double NonlinearEvolution::computeGrowthRate() const {
@@ -675,11 +747,17 @@ void NonlinearEvolution::storeDiagnostics() {
     time_history_.push_back(time_);
     energy_history_.push_back(computeTotalEnergy());
     kink_amplitude_history_.push_back(computeKinkAmplitude());
+    sausage_amplitude_history_.push_back(computeSausageAmplitude()); // NEW
     
     // Calculate growth rate at every step for better precision
     if (time_history_.size() >= 2) {
         double growth_rate = computeGrowthRate();
         growth_rate_history_.push_back(growth_rate);
+        
+        // Optional: Calculate sausage growth rate
+        if (sausage_amplitude_history_.size() >= 2) {
+            // You can implement sausage growth rate calculation here
+        }
     }
 }
 
